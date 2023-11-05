@@ -1,0 +1,21 @@
+version: '3'
+
+tasks:
+  export-web:
+    cmds:
+      - cargo build 
+        --profile web-release 
+        --target wasm32-unknown-unknown
+      - rm -rf out
+      - wasm-bindgen 
+        --out-name golf 
+        --out-dir ./out/game/ 
+        --target web 
+        ./target/wasm32-unknown-unknown/web-release/golf.wasm
+      - cp -r assets out/
+      - cp -r web/ out/
+    silent: true
+  deploy-web:
+    deps: [export-web]
+    cmds:
+      - fly deploy --local-only

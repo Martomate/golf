@@ -1,0 +1,25 @@
+[package]
+name = "golf"
+version = "0.1.0"
+edition = "2021"
+
+[profile.web-release]
+inherits = "release"
+codegen-units = 1
+strip = "debuginfo"
+opt-level = "z"
+lto = "thin"
+
+[profile.dev.package.bevy_rapier3d]
+opt-level = 3
+
+[dependencies]
+bevy = "0.11.3"
+bevy_prng = { version = "0.1.0", features = ["rand_chacha"] }
+bevy_rand = "0.3.0"
+bevy_rapier3d = { version = "0.22.0", features = ["debug-render-3d"] }
+rand_core = "0.6.4"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1.7"
+wasm-bindgen = "0.2.88"
