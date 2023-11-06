@@ -9,8 +9,8 @@ use bevy_prng::ChaCha8Rng;
 use bevy_rand::prelude::*;
 use bevy_rapier3d::{
     prelude::{
-        Collider, Damping, ExternalImpulse, Friction, NoUserData, RapierPhysicsPlugin, Restitution,
-        RigidBody, Velocity,
+        Ccd, Collider, Damping, ExternalImpulse, Friction, NoUserData, RapierPhysicsPlugin,
+        Restitution, RigidBody, Velocity,
     },
     render::RapierDebugRenderPlugin,
 };
@@ -25,10 +25,10 @@ fn main() {
     #[cfg(target_arch = "wasm32")]
     console_error_panic_hook::set_once();
 
-    App::new()
-        .add_plugins(DefaultPlugins)
+    let mut app = App::new();
+
+    app.add_plugins(DefaultPlugins)
         .add_plugins(RapierPhysicsPlugin::<NoUserData>::default())
-        .add_plugins(RapierDebugRenderPlugin::default())
         .add_plugins(EntropyPlugin::<ChaCha8Rng>::default())
         .insert_resource(ClearColor(BACKGROUND_COLOR))
         .insert_resource(AmbientLight {
@@ -39,8 +39,13 @@ fn main() {
         .insert_resource(FixedTime::new_from_secs(1.0 / 60.0))
         .add_systems(Startup, (setup_graphics, setup_physics))
         // Add our gameplay simulation systems to the fixed timestep schedule
-        .add_systems(Update, (camera_input, jump))
-        .run();
+        .add_systems(Update, (camera_input, move_camera_to_ball, keyboard_input));
+
+    if cfg!(debug_assertions) {
+        app.add_plugins(RapierDebugRenderPlugin::default());
+    }
+
+    app.run();
 }
 
 #[derive(Component)]
@@ -79,8 +84,11 @@ fn setup_graphics(mut commands: Commands) {
     commands.spawn(DirectionalLightBundle {
         directional_light: DirectionalLight {
             shadows_enabled: true,
+            illuminance: 20000.0,
             ..default()
         },
+        transform: Transform::from_xyz(0.0, 1.5, -1.0)
+            .looking_at(Vec3::new(0.0, 0.0, 0.0), Vec3::Y),
         ..default()
     });
 }
@@ -94,6 +102,44 @@ fn setup_physics(mut commands: Commands, asset_server: Res<AssetServer>) {
 
     commands
         .spawn((
+            RigidBody::Fixed,
+            Collider::compound(vec![
+                (
+                    Vec3::new(0.0, 0.0, -10.0),
+                    Quat::IDENTITY,
+                    Collider::cuboid(1.0, 0.05, 11.0),
+                ),
+                (
+                    Vec3::new(1.05, 0.05, -10.0),
+                    Quat::IDENTITY,
+                    Collider::cuboid(0.05, 0.1, 11.0),
+                ),
+                (
+                    Vec3::new(-1.05, 0.05, -10.0),
+                    Quat::IDENTITY,
+                    Collider::cuboid(0.05, 0.1, 11.0),
+                ),
+                (
+                    Vec3::new(0.0, 0.05, 1.05),
+                    Quat::IDENTITY,
+                    Collider::cuboid(1.1, 0.1, 0.05),
+                ),
+                (
+                    Vec3::new(0.0, 0.05, -21.05),
+                    Quat::IDENTITY,
+                    Collider::cuboid(1.1, 0.1, 0.05),
+                ),
+            ]),
+        ))
+        .insert(SceneBundle {
+            scene: asset_server.load("models/lane.gltf#Scene0"),
+            transform: Transform::from_xyz(0.0, 0.3, 0.0)
+                .with_rotation(Quat::from_rotation_y(-PI / 2.0)).with_scale(Vec3::new(0.5, 0.5, 0.5)),
+            ..default()
+        });
+
+    commands
+        .spawn((
             RigidBody::Dynamic,
             Collider::ball(0.025),
             ExternalImpulse::default(),
@@ -103,6 +149,7 @@ fn setup_physics(mut commands: Commands, asset_server: Res<AssetServer>) {
                 linear_damping: 0.95,
                 angular_damping: 0.95,
             },
+            Ccd::enabled(),
         ))
         .insert(Velocity {
             linvel: Vec3::new(0.0, 0.0, 0.0),
@@ -127,10 +174,10 @@ fn camera_input(
     mut mouse_motion: EventReader<MouseMotion>,
     mut mouse_wheel: EventReader<MouseWheel>,
     buttons: Res<Input<MouseButton>>,
-    mut query: Query<(&mut CameraController, &mut Transform)>,
+    mut query: Query<&mut CameraController>,
     time: Res<Time>,
 ) {
-    for (mut controller, mut transform) in query.iter_mut() {
+    for mut controller in query.iter_mut() {
         for wheel in mouse_wheel.iter() {
             controller.zoom -= wheel.y * 0.01;
         }
@@ -140,12 +187,23 @@ fn camera_input(
                 controller.rotation *= Quat::from_euler(EulerRot::XYZ, delta.y, delta.x, 0.0);
             }
         }
-        transform.translation = controller.rotation * Vec3::Z * controller.zoom;
-        transform.look_at(Vec3::ZERO, Vec3::Y);
     }
 }
 
-fn jump(
+fn move_camera_to_ball(
+    mut query: Query<(&CameraController, &mut Transform), Without<Ball>>,
+    ball: Query<&Transform, With<Ball>>,
+) {
+    let (controller, mut transform) = query.single_mut();
+    let ball_pos = ball.single().translation;
+    let mut look = controller.rotation * Vec3::Z;
+    look.y = 0.1;
+    look = look.normalize();
+    transform.translation = ball_pos + look * controller.zoom;
+    transform.look_at(ball_pos, Vec3::Y);
+}
+
+fn keyboard_input(
     keys: Res<Input<KeyCode>>,
     mut q_ball: Query<(&mut ExternalImpulse, &Velocity)>,
     mut shoot_settings: Query<&mut ShootSettings>,
@@ -199,33 +257,35 @@ fn jump(
         }
 
         if keys.just_pressed(KeyCode::Space) {
-            for (mut ball_impulse, _) in &mut q_ball {
-                let rot = Quat::from_euler(EulerRot::XYZ, 0.0, shoot.angle, 0.0);
-                let transform = Transform::from_rotation(rot);
-                let dir = transform * Vec3::X;
-                
-                let power_multiplier = 1.0e-4;
-                let shot = dir * shoot.power * power_multiplier;
-                ball_impulse.impulse.x += shot.x;
-                ball_impulse.impulse.y += shot.y;
-                ball_impulse.impulse.z += shot.z;
+            if *shoot != ShootSettings::default() {
+                for (mut ball_impulse, _) in &mut q_ball {
+                    let rot = Quat::from_euler(EulerRot::XYZ, 0.0, shoot.angle, 0.0);
+                    let transform = Transform::from_rotation(rot);
+                    let dir = transform * Vec3::X;
 
-                let torqe_magnitude = 1.0e-2;
-                let torque_amount = match shoot.spin {
-                    Some(BallSpin::Left) => -torqe_magnitude,
-                    Some(BallSpin::Right) => torqe_magnitude,
-                    None => 0.0,
-                };
-                ball_impulse.torque_impulse.y += torque_amount;
-                ball_impulse.torque_impulse.x += torque_amount;
-            }
+                    let power_multiplier = 1.0e-4;
+                    let shot = dir * shoot.power * power_multiplier;
+                    ball_impulse.impulse.x += shot.x;
+                    ball_impulse.impulse.y += shot.y;
+                    ball_impulse.impulse.z += shot.z;
 
-            *shoot = ShootSettings::default();
-        }
-    } else if keys.just_pressed(KeyCode::Space) {
-        for (mut ball_impulse, ball_velocity) in &mut q_ball {
-            if ball_velocity.linvel.y.abs() <= 0.05 {
-                ball_impulse.impulse.y += 5.0;
+                    let torqe_magnitude = 1.0e-3;
+                    let torque_amount = match shoot.spin {
+                        Some(BallSpin::Left) => -torqe_magnitude,
+                        Some(BallSpin::Right) => torqe_magnitude,
+                        None => 0.0,
+                    };
+                    ball_impulse.torque_impulse.y += torque_amount;
+                    ball_impulse.torque_impulse.x += torque_amount;
+                }
+
+                *shoot = ShootSettings::default();
+            } else {
+                for (mut ball_impulse, ball_velocity) in &mut q_ball {
+                    if ball_velocity.linvel.y.abs() <= 0.05 {
+                        ball_impulse.impulse.y += 5.0e-4;
+                    }
+                }
             }
         }
     }
