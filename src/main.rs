@@ -135,6 +135,25 @@ fn setup_graphics(mut commands: Commands) {
     });
 }
 
+fn create_collider_from_gltf_node(node: &GltfNode, gltf_meshes: &Assets<GltfMesh>, meshes: &Assets<Mesh>) -> Collider {
+    let mesh = node.mesh.as_ref().unwrap();
+    let gltf_mesh = gltf_meshes.get(mesh).unwrap();
+    let handle = &gltf_mesh.primitives[0].mesh;
+    let lane_mesh = meshes.get(handle).unwrap();
+
+    let lane_collider = Collider::from_bevy_mesh(lane_mesh, &ComputedColliderShape::TriMesh).unwrap();
+
+    let mut tr = node.transform;
+    tr.translation /= tr.scale;
+
+    let mut trimesh = lane_collider.as_trimesh().unwrap().raw.clone();
+    trimesh.transform_vertices(&Isometry {rotation: tr.rotation.into(), translation: tr.translation.into()});
+    trimesh = trimesh.scaled(&tr.scale.into());
+    trimesh.transform_vertices(&Isometry::default());
+
+    Collider::from(SharedShape::new(trimesh))
+}
+
 fn load_level(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
@@ -148,54 +167,13 @@ fn load_level(
         TransformBundle::from(Transform::from_xyz(0.0, 0.0, 0.0)),
     ));
 
-    let node_handle: Handle<GltfNode> = asset_server.load("models/lane.gltf#Node1");
-    let node = nodes.get(&node_handle).unwrap();
+    let mut lane_colliders = Vec::new();
+    for i in 0..5 {
+        let node_handle: Handle<GltfNode> = asset_server.load(format!("models/lane.gltf#Node{i}"));
+        let node = nodes.get(&node_handle).unwrap();
 
-    let mesh = node.mesh.as_ref().unwrap();
-    let gltf_mesh = gltf_meshes.get(mesh).unwrap();
-    let handle = &gltf_mesh.primitives[0].mesh;
-    let lane_mesh = meshes.get(handle).unwrap();
-
-    let lane_collider =
-        Collider::from_bevy_mesh(lane_mesh, &ComputedColliderShape::TriMesh).unwrap();
-
-    /*  Collider::compound(vec![
-        (
-            Vec3::new(0.0, 0.0, -10.0),
-            Quat::IDENTITY,
-            Collider::cuboid(1.0, 0.05, 11.0),
-        ),
-        (
-            Vec3::new(1.05, 0.05, -10.0),
-            Quat::IDENTITY,
-            Collider::cuboid(0.05, 0.1, 11.0),
-        ),
-        (
-            Vec3::new(-1.05, 0.05, -10.0),
-            Quat::IDENTITY,
-            Collider::cuboid(0.05, 0.1, 11.0),
-        ),
-        (
-            Vec3::new(0.0, 0.05, 1.05),
-            Quat::IDENTITY,
-            Collider::cuboid(1.1, 0.1, 0.05),
-        ),
-        (
-            Vec3::new(0.0, 0.05, -21.05),
-            Quat::IDENTITY,
-            Collider::cuboid(1.1, 0.1, 0.05),
-        ),
-    ]*/
-
-    let mut tr = node.transform;
-    tr.translation /= tr.scale;
-
-    let mut trimesh = lane_collider.as_trimesh().unwrap().raw.clone();
-    trimesh.transform_vertices(&Isometry {rotation: tr.rotation.into(), translation: tr.translation.into()});
-    trimesh = trimesh.scaled(&tr.scale.into());
-    trimesh.transform_vertices(&Isometry::default());
-
-    let lane_collider = Collider::from(SharedShape::new(trimesh));
+        lane_colliders.push(create_collider_from_gltf_node(node, &gltf_meshes, &meshes));
+    }
 
     commands
         .spawn((
@@ -209,10 +187,12 @@ fn load_level(
             },
         ))
         .with_children(|parent| {
-            parent.spawn((
-                lane_collider,
-                TransformBundle::IDENTITY,
-            ));
+            for lane_collider in lane_colliders {
+                parent.spawn((
+                    lane_collider,
+                    TransformBundle::IDENTITY,
+                ));
+            }
         });
 
     commands
