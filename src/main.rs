@@ -1,24 +1,26 @@
 use std::f32::consts::PI;
 
 use bevy::{
+    gltf::{GltfMesh, GltfNode},
     input::mouse::{MouseMotion, MouseWheel},
     pbr::DirectionalLightShadowMap,
     prelude::*,
 };
 use bevy_prng::ChaCha8Rng;
 use bevy_rand::prelude::*;
-use bevy_rapier3d::{
-    prelude::{
-        Ccd, Collider, Damping, ExternalImpulse, Friction, NoUserData, RapierPhysicsPlugin,
-        Restitution, RigidBody, Velocity,
-    },
-    render::RapierDebugRenderPlugin,
-};
+use bevy_rapier3d::{prelude::*, render::RapierDebugRenderPlugin, rapier::prelude::{Isometry, SharedShape}};
 
 // These constants are defined in `Transform` units.
 // Using the default 2D camera they correspond 1:1 with screen pixels.
 
 const BACKGROUND_COLOR: Color = Color::rgb(0.9, 0.9, 0.9);
+
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Hash, States)]
+enum AppState {
+    #[default]
+    Loading,
+    InGame,
+}
 
 fn main() {
     // When building for WASM, print panics to the browser console
@@ -30,6 +32,7 @@ fn main() {
     app.add_plugins(DefaultPlugins)
         .add_plugins(RapierPhysicsPlugin::<NoUserData>::default())
         .add_plugins(EntropyPlugin::<ChaCha8Rng>::default())
+        .add_state::<AppState>()
         .insert_resource(ClearColor(BACKGROUND_COLOR))
         .insert_resource(AmbientLight {
             color: Color::WHITE,
@@ -37,9 +40,20 @@ fn main() {
         })
         .insert_resource(DirectionalLightShadowMap { size: 4096 })
         .insert_resource(FixedTime::new_from_secs(1.0 / 60.0))
-        .add_systems(Startup, (setup_graphics, setup_physics))
+        .insert_resource(AssetsLoading(Vec::new()))
+        .add_systems(Startup, setup_graphics)
+        .add_systems(OnEnter(AppState::Loading), load_assets)
+        .add_systems(OnEnter(AppState::InGame), load_level)
         // Add our gameplay simulation systems to the fixed timestep schedule
-        .add_systems(Update, (camera_input, move_camera_to_ball, keyboard_input));
+        .add_systems(
+            Update,
+            (
+                check_assets_ready,
+                camera_input,
+                move_camera_to_ball,
+                keyboard_input,
+            ),
+        );
 
     if cfg!(debug_assertions) {
         app.add_plugins(RapierDebugRenderPlugin::default());
@@ -62,6 +76,34 @@ struct ShootSettings {
     power: f32,
     angle: f32,
     spin: Option<BallSpin>,
+}
+
+#[derive(Resource)]
+struct AssetsLoading(Vec<HandleUntyped>);
+
+fn load_assets(server: Res<AssetServer>, mut loading: ResMut<AssetsLoading>) {
+    let scene: Handle<Scene> = server.load("models/lane.gltf#Scene0");
+    loading.0.push(scene.clone_untyped());
+}
+
+// TODO: load level when the models have finished loading (listen to AssetEvents)
+
+fn check_assets_ready(
+    server: Res<AssetServer>,
+    loading: Res<AssetsLoading>,
+    mut next_state: ResMut<NextState<AppState>>,
+) {
+    use bevy::asset::LoadState;
+
+    match server.get_group_load_state(loading.0.iter().map(|a| a.id())) {
+        LoadState::Failed => {
+            // one of our assets had an error
+        }
+        LoadState::Loaded => next_state.set(AppState::InGame),
+        _ => {
+            // NotLoaded/Loading: not fully ready yet
+        }
+    }
 }
 
 fn setup_graphics(mut commands: Commands) {
@@ -93,49 +135,84 @@ fn setup_graphics(mut commands: Commands) {
     });
 }
 
-fn setup_physics(mut commands: Commands, asset_server: Res<AssetServer>) {
+fn load_level(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    nodes: Res<Assets<GltfNode>>,
+    gltf_meshes: Res<Assets<GltfMesh>>,
+    meshes: Res<Assets<Mesh>>,
+) {
     commands.spawn((
         Collider::cuboid(100.0, 0.1, 100.0),
         Friction::new(1.0),
         TransformBundle::from(Transform::from_xyz(0.0, 0.0, 0.0)),
     ));
 
+    let node_handle: Handle<GltfNode> = asset_server.load("models/lane.gltf#Node1");
+    let node = nodes.get(&node_handle).unwrap();
+
+    let mesh = node.mesh.as_ref().unwrap();
+    let gltf_mesh = gltf_meshes.get(mesh).unwrap();
+    let handle = &gltf_mesh.primitives[0].mesh;
+    let lane_mesh = meshes.get(handle).unwrap();
+
+    let lane_collider =
+        Collider::from_bevy_mesh(lane_mesh, &ComputedColliderShape::TriMesh).unwrap();
+
+    /*  Collider::compound(vec![
+        (
+            Vec3::new(0.0, 0.0, -10.0),
+            Quat::IDENTITY,
+            Collider::cuboid(1.0, 0.05, 11.0),
+        ),
+        (
+            Vec3::new(1.05, 0.05, -10.0),
+            Quat::IDENTITY,
+            Collider::cuboid(0.05, 0.1, 11.0),
+        ),
+        (
+            Vec3::new(-1.05, 0.05, -10.0),
+            Quat::IDENTITY,
+            Collider::cuboid(0.05, 0.1, 11.0),
+        ),
+        (
+            Vec3::new(0.0, 0.05, 1.05),
+            Quat::IDENTITY,
+            Collider::cuboid(1.1, 0.1, 0.05),
+        ),
+        (
+            Vec3::new(0.0, 0.05, -21.05),
+            Quat::IDENTITY,
+            Collider::cuboid(1.1, 0.1, 0.05),
+        ),
+    ]*/
+
+    let mut tr = node.transform;
+    tr.translation /= tr.scale;
+
+    let mut trimesh = lane_collider.as_trimesh().unwrap().raw.clone();
+    trimesh.transform_vertices(&Isometry {rotation: tr.rotation.into(), translation: tr.translation.into()});
+    trimesh = trimesh.scaled(&tr.scale.into());
+    trimesh.transform_vertices(&Isometry::default());
+
+    let lane_collider = Collider::from(SharedShape::new(trimesh));
+
     commands
         .spawn((
             RigidBody::Fixed,
-            Collider::compound(vec![
-                (
-                    Vec3::new(0.0, 0.0, -10.0),
-                    Quat::IDENTITY,
-                    Collider::cuboid(1.0, 0.05, 11.0),
-                ),
-                (
-                    Vec3::new(1.05, 0.05, -10.0),
-                    Quat::IDENTITY,
-                    Collider::cuboid(0.05, 0.1, 11.0),
-                ),
-                (
-                    Vec3::new(-1.05, 0.05, -10.0),
-                    Quat::IDENTITY,
-                    Collider::cuboid(0.05, 0.1, 11.0),
-                ),
-                (
-                    Vec3::new(0.0, 0.05, 1.05),
-                    Quat::IDENTITY,
-                    Collider::cuboid(1.1, 0.1, 0.05),
-                ),
-                (
-                    Vec3::new(0.0, 0.05, -21.05),
-                    Quat::IDENTITY,
-                    Collider::cuboid(1.1, 0.1, 0.05),
-                ),
-            ]),
+            SceneBundle {
+                scene: asset_server.load("models/lane.gltf#Scene0"),
+                transform: Transform::from_xyz(0.0, 0.3, 0.0)
+                    .with_rotation(Quat::from_rotation_y(-PI / 2.0))
+                    .with_scale(Vec3::new(0.5, 0.5, 0.5)),
+                ..default()
+            },
         ))
-        .insert(SceneBundle {
-            scene: asset_server.load("models/lane.gltf#Scene0"),
-            transform: Transform::from_xyz(0.0, 0.3, 0.0)
-                .with_rotation(Quat::from_rotation_y(-PI / 2.0)).with_scale(Vec3::new(0.5, 0.5, 0.5)),
-            ..default()
+        .with_children(|parent| {
+            parent.spawn((
+                lane_collider,
+                TransformBundle::IDENTITY,
+            ));
         });
 
     commands
@@ -184,7 +261,7 @@ fn camera_input(
         if buttons.pressed(MouseButton::Left) {
             for mouse in mouse_motion.iter() {
                 let delta = mouse.delta * time.delta_seconds() * 0.3;
-                controller.rotation *= Quat::from_euler(EulerRot::XYZ, delta.y, delta.x, 0.0);
+                controller.rotation *= Quat::from_euler(EulerRot::XYZ, -delta.y, -delta.x, 0.0);
             }
         }
     }
@@ -192,15 +269,18 @@ fn camera_input(
 
 fn move_camera_to_ball(
     mut query: Query<(&CameraController, &mut Transform), Without<Ball>>,
-    ball: Query<&Transform, With<Ball>>,
+    q_ball: Query<&Transform, With<Ball>>,
 ) {
-    let (controller, mut transform) = query.single_mut();
-    let ball_pos = ball.single().translation;
-    let mut look = controller.rotation * Vec3::Z;
-    look.y = 0.1;
-    look = look.normalize();
-    transform.translation = ball_pos + look * controller.zoom;
-    transform.look_at(ball_pos, Vec3::Y);
+    if let Ok((controller, mut transform)) = query.get_single_mut() {
+        if let Ok(ball) = q_ball.get_single() {
+            let ball_pos = ball.translation;
+            let mut look = controller.rotation * Vec3::Z;
+            look.y = 0.5;
+            look = look.normalize();
+            transform.translation = ball_pos + look * controller.zoom;
+            transform.look_at(ball_pos, Vec3::Y);
+        }
+    }
 }
 
 fn keyboard_input(
