@@ -8,7 +8,11 @@ use bevy::{
 };
 use bevy_prng::ChaCha8Rng;
 use bevy_rand::prelude::*;
-use bevy_rapier3d::{prelude::*, render::RapierDebugRenderPlugin, rapier::prelude::{Isometry, SharedShape}};
+use bevy_rapier3d::{
+    prelude::*,
+    rapier::prelude::{Isometry, SharedShape},
+    render::RapierDebugRenderPlugin,
+};
 
 // These constants are defined in `Transform` units.
 // Using the default 2D camera they correspond 1:1 with screen pixels.
@@ -52,6 +56,7 @@ fn main() {
                 camera_input,
                 move_camera_to_ball,
                 keyboard_input,
+                update_shoot_power_indicator.after(keyboard_input),
             ),
         );
 
@@ -78,6 +83,9 @@ struct ShootSettings {
     spin: Option<BallSpin>,
 }
 
+#[derive(Component)]
+struct ShootPowerIndicator;
+
 #[derive(Resource)]
 struct AssetsLoading(Vec<HandleUntyped>);
 
@@ -86,8 +94,6 @@ fn load_assets(server: Res<AssetServer>, mut loading: ResMut<AssetsLoading>) {
     loading.0.push(scene.clone_untyped());
 }
 
-// TODO: load level when the models have finished loading (listen to AssetEvents)
-
 fn check_assets_ready(
     server: Res<AssetServer>,
     loading: Res<AssetsLoading>,
@@ -95,14 +101,8 @@ fn check_assets_ready(
 ) {
     use bevy::asset::LoadState;
 
-    match server.get_group_load_state(loading.0.iter().map(|a| a.id())) {
-        LoadState::Failed => {
-            // one of our assets had an error
-        }
-        LoadState::Loaded => next_state.set(AppState::InGame),
-        _ => {
-            // NotLoaded/Loading: not fully ready yet
-        }
+    if server.get_group_load_state(loading.0.iter().map(|a| a.id())) == LoadState::Loaded {
+        next_state.set(AppState::InGame);
     }
 }
 
@@ -135,19 +135,27 @@ fn setup_graphics(mut commands: Commands) {
     });
 }
 
-fn create_collider_from_gltf_node(node: &GltfNode, gltf_meshes: &Assets<GltfMesh>, meshes: &Assets<Mesh>) -> Collider {
+fn create_collider_from_gltf_node(
+    node: &GltfNode,
+    gltf_meshes: &Assets<GltfMesh>,
+    meshes: &Assets<Mesh>,
+) -> Collider {
     let mesh = node.mesh.as_ref().unwrap();
     let gltf_mesh = gltf_meshes.get(mesh).unwrap();
     let handle = &gltf_mesh.primitives[0].mesh;
     let lane_mesh = meshes.get(handle).unwrap();
 
-    let lane_collider = Collider::from_bevy_mesh(lane_mesh, &ComputedColliderShape::TriMesh).unwrap();
+    let lane_collider =
+        Collider::from_bevy_mesh(lane_mesh, &ComputedColliderShape::TriMesh).unwrap();
 
     let mut tr = node.transform;
     tr.translation /= tr.scale;
 
     let mut trimesh = lane_collider.as_trimesh().unwrap().raw.clone();
-    trimesh.transform_vertices(&Isometry {rotation: tr.rotation.into(), translation: tr.translation.into()});
+    trimesh.transform_vertices(&Isometry {
+        rotation: tr.rotation.into(),
+        translation: tr.translation.into(),
+    });
     trimesh = trimesh.scaled(&tr.scale.into());
     trimesh.transform_vertices(&Isometry::default());
 
@@ -159,7 +167,8 @@ fn load_level(
     asset_server: Res<AssetServer>,
     nodes: Res<Assets<GltfNode>>,
     gltf_meshes: Res<Assets<GltfMesh>>,
-    meshes: Res<Assets<Mesh>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     commands.spawn((
         Collider::cuboid(100.0, 0.1, 100.0),
@@ -188,10 +197,7 @@ fn load_level(
         ))
         .with_children(|parent| {
             for lane_collider in lane_colliders {
-                parent.spawn((
-                    lane_collider,
-                    TransformBundle::IDENTITY,
-                ));
+                parent.spawn((lane_collider, TransformBundle::IDENTITY));
             }
         });
 
@@ -219,6 +225,40 @@ fn load_level(
         })
         .insert(Ball)
         .insert(ShootSettings::default());
+
+    commands.spawn((
+        ShootPowerIndicator,
+        PbrBundle {
+            mesh: meshes.add(shape::Cube::new(1.0).into()),
+            transform: Transform::from_xyz(0.0, 0.0, 0.0)
+                .with_rotation(Quat::from_euler(EulerRot::XYZ, 0.0, 0.0, 0.0))
+                .with_scale(Vec3::new(1.0, 1.0, 1.0)),
+            material: materials.add(StandardMaterial {
+                base_color: Color::CYAN,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    ));
+}
+
+fn update_shoot_power_indicator(
+    mut q_indicator: Query<&mut Transform, (With<ShootPowerIndicator>, Without<Ball>)>,
+    q_ball: Query<(&Transform, &ShootSettings), With<Ball>>,
+) {
+    if let Ok((ball_transform, shoot_settings)) = q_ball.get_single() {
+        let length = shoot_settings.power * 0.1;
+        let pos = ball_transform.translation;
+        let angle = shoot_settings.angle;
+        let scale = Vec3::new(length, 0.005, 0.02);
+
+        let t1 = Transform::from_xyz(length * 0.5, 0.0, 0.0).with_scale(scale);
+        let t2 = Transform::from_translation(pos).with_rotation(Quat::from_rotation_y(angle));
+
+        if let Ok(mut indicator_transform) = q_indicator.get_single_mut() {
+            *indicator_transform = t2 * t1;
+        }
+    }
 }
 
 #[derive(Component)]
