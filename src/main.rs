@@ -4,7 +4,7 @@ use bevy::{
     gltf::{GltfMesh, GltfNode},
     input::mouse::{MouseMotion, MouseWheel},
     pbr::DirectionalLightShadowMap,
-    prelude::*,
+    prelude::*, scene::SceneInstance,
 };
 use bevy_rapier3d::{prelude::*, render::RapierDebugRenderPlugin};
 use rand::Rng;
@@ -41,7 +41,7 @@ fn main() {
         .insert_resource(DirectionalLightShadowMap { size: 4096 })
         .insert_resource(FixedTime::new_from_secs(1.0 / 60.0))
         .insert_resource(AssetsLoading::default())
-        .insert_resource(GameState::new(2))
+        .insert_resource(GameState::new(4))
         .add_systems(Startup, setup_graphics)
         .add_systems(OnEnter(AppState::Loading), load_assets)
         .add_systems(OnEnter(AppState::InGame), load_level)
@@ -55,6 +55,7 @@ fn main() {
                 keyboard_input,
                 update_shoot_power_indicator,
                 check_ball_in_hole,
+                customize_scene_materials,
             ),
         );
 
@@ -112,6 +113,9 @@ struct PlayerData {
     scores: Vec<u32>,
 }
 
+#[derive(Component)]
+struct NeedsColorChange(Color);
+
 #[derive(Resource, Default)]
 struct AssetsLoading(Vec<HandleUntyped>);
 
@@ -136,7 +140,7 @@ fn setup_graphics(mut commands: Commands) {
     commands.spawn((
         CameraController {
             rotation: Quat::IDENTITY,
-            zoom: 20.0,
+            zoom: 0.0,
         },
         Camera3dBundle {
             camera: Camera {
@@ -214,11 +218,14 @@ fn load_level(
 
     let mut rng = rand::thread_rng();
     for player_id in 0..game_state.num_players {
-        let start_pos_offset = Vec2::new(
-            (rng.gen::<f32>() * 2.0 - 1.0) * 0.2,
-            (rng.gen::<f32>() * 2.0 - 1.0) * 0.2,
+        spawn_ball(
+            &mut commands,
+            &asset_server,
+            player_id,
+            rng.gen_range(-0.4..0.4),
+            rng.gen_range(-0.4..0.0),
+            Color::hsl(rng.gen_range(0.0..360.0), 1.0, 0.5),
         );
-        spawn_ball(&mut commands, &asset_server, player_id, start_pos_offset);
     }
 
     commands.spawn((
@@ -237,12 +244,39 @@ fn load_level(
     ));
 }
 
+fn customize_scene_materials(
+    mut commands: Commands,
+    unloaded_instances: Query<(Entity, &SceneInstance, &NeedsColorChange)>,
+    mut handles: Query<(Entity, &mut Handle<StandardMaterial>)>,
+    mut pbr_materials: ResMut<Assets<StandardMaterial>>,
+    scene_manager: Res<SceneSpawner>,
+) {
+    for (entity, instance, requesed_change) in unloaded_instances.iter() {
+        if scene_manager.instance_is_ready(**instance) {
+            commands.entity(entity).remove::<NeedsColorChange>();
+        }
+        // Iterate over all entities in scene (once it's loaded)
+        let mut handles = handles.iter_many_mut(scene_manager.iter_instance_entities(**instance));
+        while let Some((_, mut material_handle)) = handles.fetch_next() {
+            let Some(material) = pbr_materials.get(&material_handle) else { continue; };
+            let mut new_material = material.clone();
+            new_material.base_color = requesed_change.0;
+
+            *material_handle = pbr_materials.add(new_material);
+        }
+    }
+}
+
 fn spawn_ball(
     commands: &mut Commands,
     asset_server: &AssetServer,
     player_id: u32,
-    start_pos_offset: Vec2,
+    offset_sideways: f32,
+    offset_along: f32,
+    color: Color,
 ) {
+    let scene_handle = asset_server.load("models/sphere.gltf#Scene0");
+    
     commands
         .spawn((
             RigidBody::Dynamic,
@@ -261,10 +295,12 @@ fn spawn_ball(
             angvel: Vec3::new(0.0, 0.0, 0.0),
         })
         .insert(SceneBundle {
-            scene: asset_server.load("models/sphere.gltf#Scene0"),
-            transform: Transform::from_xyz(0.0, 1.0, 0.0) * Transform::from_xyz(start_pos_offset.x, 0.0, start_pos_offset.y),
+            scene: scene_handle,
+            transform: Transform::from_xyz(0.0, 1.0, 0.0)
+                * Transform::from_xyz(offset_along, 0.0, offset_sideways),
             ..default()
         })
+        .insert(NeedsColorChange(color))
         .insert(Ball { player_id, hits: 0 })
         .insert(ShootSettings::default());
 }
@@ -290,7 +326,7 @@ fn check_ball_in_hole(
 
                 game_state.current_player =
                     (game_state.current_player + 1) % game_state.num_players;
-                
+
                 if game_state.players.iter().all(|p| p.scores.len() == 1) {
                     println!("Level 1 completed!");
                 }
@@ -311,7 +347,7 @@ fn update_shoot_power_indicator(
         let length = shoot_settings.power * 0.1;
         let pos = ball_transform.translation;
         let angle = shoot_settings.angle;
-        let scale = Vec3::new(length, 0.005, 0.02);
+        let scale = Vec3::new(length, if length == 0.0 { 0.0 } else { 0.005 }, 0.02);
 
         let t1 = Transform::from_xyz(length * 0.5, 0.0, 0.0).with_scale(scale);
         let t2 = Transform::from_translation(pos).with_rotation(Quat::from_rotation_y(angle));
@@ -337,7 +373,7 @@ fn camera_input(
 ) {
     for mut controller in query.iter_mut() {
         for wheel in mouse_wheel.iter() {
-            controller.zoom -= wheel.y * 0.01;
+            controller.zoom += wheel.y * 0.001;
         }
         if buttons.pressed(MouseButton::Left) {
             for mouse in mouse_motion.iter() {
@@ -360,9 +396,9 @@ fn move_camera_to_ball(
         {
             let ball_pos = ball_transform.translation;
             let mut look = controller.rotation * Vec3::Z;
-            look.y = 0.5;
+            look.y = 0.3;
             look = look.normalize();
-            transform.translation = ball_pos + look * controller.zoom;
+            transform.translation = ball_pos + look * (-controller.zoom).exp();
             transform.look_at(ball_pos, Vec3::Y);
         }
     }
@@ -370,62 +406,63 @@ fn move_camera_to_ball(
 
 fn keyboard_input(
     keys: Res<Input<KeyCode>>,
-    mut q_ball: Query<(&mut ExternalImpulse, &Velocity, &mut ShootSettings, &mut Ball)>,
+    mut q_ball: Query<(
+        &mut ExternalImpulse,
+        &Velocity,
+        &mut ShootSettings,
+        &mut Ball,
+    )>,
     game_state: Res<GameState>,
 ) {
     if let Some((mut ball_impulse, &ball_velocity, mut shoot, mut ball)) = q_ball
         .iter_mut()
         .find(|(_, _, _, ball)| ball.player_id == game_state.current_player)
     {
-        let shoot_before = shoot.clone();
+        if ball_velocity.linvel.length() < 0.01 {
+            let max_power = 10.0;
+            let power_speed = 0.1;
+            let angle_speed = 0.5 / 180.0 * PI;
 
-        let max_power = 10.0;
-        let power_speed = 0.1;
-        let angle_speed = 0.5 / 180.0 * PI;
-
-        if keys.pressed(KeyCode::W) {
-            shoot.power += power_speed;
-        }
-        if keys.pressed(KeyCode::S) {
-            shoot.power -= power_speed;
-        }
-        if keys.pressed(KeyCode::A) {
-            shoot.angle += angle_speed;
-        }
-        if keys.pressed(KeyCode::D) {
-            shoot.angle -= angle_speed;
-        }
-        if keys.just_pressed(KeyCode::Q) {
-            if let Some(BallSpin::Left) = shoot.spin {
-                shoot.spin = None;
-            } else {
-                shoot.spin = Some(BallSpin::Left);
+            if keys.pressed(KeyCode::W) {
+                shoot.power += power_speed;
             }
-        }
-        if keys.just_pressed(KeyCode::E) {
-            if let Some(BallSpin::Right) = shoot.spin {
-                shoot.spin = None;
-            } else {
-                shoot.spin = Some(BallSpin::Right);
+            if keys.pressed(KeyCode::S) {
+                shoot.power -= power_speed;
             }
-        }
-        if keys.just_pressed(KeyCode::Escape) {
-            *shoot = ShootSettings::default();
-        }
+            if keys.pressed(KeyCode::A) {
+                shoot.angle += angle_speed;
+            }
+            if keys.pressed(KeyCode::D) {
+                shoot.angle -= angle_speed;
+            }
+            if keys.just_pressed(KeyCode::Q) {
+                if let Some(BallSpin::Left) = shoot.spin {
+                    shoot.spin = None;
+                } else {
+                    shoot.spin = Some(BallSpin::Left);
+                }
+            }
+            if keys.just_pressed(KeyCode::E) {
+                if let Some(BallSpin::Right) = shoot.spin {
+                    shoot.spin = None;
+                } else {
+                    shoot.spin = Some(BallSpin::Right);
+                }
+            }
+            if keys.just_pressed(KeyCode::Escape) {
+                *shoot = ShootSettings::default();
+            }
 
-        shoot.power = shoot.power.max(0.0).min(max_power);
+            shoot.power = shoot.power.max(0.0).min(max_power);
 
-        shoot.angle %= 2.0 * PI;
-        if shoot.angle < 0.0 {
-            shoot.angle += 2.0 * PI;
-        }
-
-        if *shoot != shoot_before {
-            println!("{:?}", shoot);
+            shoot.angle %= 2.0 * PI;
+            if shoot.angle < 0.0 {
+                shoot.angle += 2.0 * PI;
+            }
         }
 
         if keys.just_pressed(KeyCode::Space) {
-            if *shoot != ShootSettings::default() {
+            if ball_velocity.linvel.length() < 0.01 && *shoot != ShootSettings::default() {
                 let rot = Quat::from_euler(EulerRot::XYZ, 0.0, shoot.angle, 0.0);
                 let transform = Transform::from_rotation(rot);
                 let dir = transform * Vec3::X;
