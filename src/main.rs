@@ -139,7 +139,7 @@ fn check_assets_ready(
 fn setup_graphics(mut commands: Commands) {
     commands.spawn((
         CameraController {
-            rotation: Quat::IDENTITY,
+            rotation: Quat::from_rotation_y(-PI * 0.5),
             zoom: 0.0,
         },
         Camera3dBundle {
