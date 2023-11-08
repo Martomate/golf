@@ -1,11 +1,11 @@
-use std::f32::consts::PI;
+use std::{f32::consts::PI, ops::Add};
 
 use bevy::{
     gltf::{GltfMesh, GltfNode},
     input::mouse::{MouseMotion, MouseWheel},
     pbr::DirectionalLightShadowMap,
     prelude::*,
-    scene::SceneInstance,
+    scene::SceneInstance, utils::HashSet,
 };
 use bevy_rapier3d::{prelude::*, render::RapierDebugRenderPlugin};
 use rand::Rng;
@@ -43,6 +43,7 @@ fn main() {
         .insert_resource(FixedTime::new_from_secs(1.0 / 60.0))
         .insert_resource(AssetsLoading::default())
         .insert_resource(GameState::new(4))
+        .insert_resource(Lanes::default())
         .add_systems(Startup, setup_graphics)
         .add_systems(OnEnter(AppState::Loading), load_assets)
         .add_systems(OnEnter(AppState::InGame), load_level)
@@ -93,6 +94,61 @@ struct ShootPowerIndicator;
 #[derive(Component)]
 struct Hole;
 
+#[derive(Default)]
+struct LaneConfig(Vec<((i32, i32), LanePart)>);
+
+impl LaneConfig {
+    fn with(mut self, tiles: &[((i32, i32), LanePart)]) -> Self {
+        self.0.extend(tiles);
+        self
+    }
+
+    fn with_walls_around(mut self) -> Self {
+        let mut walls: Vec<(i32, i32, Direction)> = Vec::new();
+        let grass: HashSet<_> = self.0.iter()
+            .filter(|(_, part)| *part == LanePart::BasicFloor || *part == LanePart::HoleFloor)
+            .map(|(pos, _)| *pos)
+            .collect();
+        for (x, y) in grass.iter() {
+            if !grass.contains(&(*x+1, *y)) {
+                walls.push((*x, *y, Direction::Right));
+            }
+            if !grass.contains(&(*x-1, *y)) {
+                walls.push((*x, *y, Direction::Left));
+            }
+            if !grass.contains(&(*x, *y+1)) {
+                walls.push((*x, *y, Direction::Up));
+            }
+            if !grass.contains(&(*x, *y-1)) {
+                walls.push((*x, *y, Direction::Down));
+            }
+        }
+        for &(x, y, dir) in walls.iter() {
+            self.0.push(((x, y), LanePart::Wall(dir)));
+        }
+        self
+    }
+}
+
+#[derive(Resource)]
+struct Lanes {
+    level1: LaneConfig,
+}
+
+impl Default for Lanes {
+    fn default() -> Self {
+        Self {
+            level1: LaneConfig::default()
+                .with(&[((1, 1), LanePart::HoleFloor)])
+                .with(&[
+                    ((0, 0), LanePart::BasicFloor),
+                    ((0, 1), LanePart::BasicFloor),
+                ])
+                .with_walls_around(),
+        }
+    }
+}
+
 #[derive(Resource)]
 struct GameState {
     num_players: u32,
@@ -122,16 +178,15 @@ struct NeedsColorChange(Color);
 struct AssetsLoading(Vec<HandleUntyped>);
 
 fn load_assets(server: Res<AssetServer>, mut loading: ResMut<AssetsLoading>) {
-    let scene: Handle<Scene> = server.load("models/lane.gltf#Scene0");
-    loading.0.push(scene.clone_untyped());
-    let scene: Handle<Scene> = server.load("models/sphere.gltf#Scene0");
-    loading.0.push(scene.clone_untyped());
-    let scene: Handle<Scene> = server.load("models/cube.gltf#Scene0");
-    loading.0.push(scene.clone_untyped());
-    let scene: Handle<Scene> = server.load("models/torus.gltf#Scene0");
-    loading.0.push(scene.clone_untyped());
-    let scene: Handle<Scene> = server.load("models/cone.gltf#Scene0");
-    loading.0.push(scene.clone_untyped());
+    for path in [
+        "models/lane.gltf#Scene0",
+        "models/sphere.gltf#Scene0",
+        "models/cube.gltf#Scene0",
+        "models/cone.gltf#Scene0",
+    ] {
+        let scene: Handle<Scene> = server.load(path);
+        loading.0.push(scene.clone_untyped());
+    }
 }
 
 fn check_assets_ready(
@@ -175,6 +230,27 @@ fn setup_graphics(mut commands: Commands) {
     });
 }
 
+struct LaneModels<'a> {
+    basic_floor: &'a GltfNode,
+    hole_floor: &'a GltfNode,
+    wall: &'a GltfNode,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum LanePart {
+    BasicFloor,
+    HoleFloor,
+    Wall(Direction),
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum Direction {
+    Up,
+    Left,
+    Down,
+    Right,
+}
+
 fn load_level(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
@@ -183,6 +259,7 @@ fn load_level(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     game_state: Res<GameState>,
+    lanes: Res<Lanes>,
 ) {
     commands.spawn((
         Collider::cuboid(100.0, 0.1, 100.0),
@@ -190,42 +267,73 @@ fn load_level(
         TransformBundle::from(Transform::from_xyz(0.0, 0.0, 0.0)),
     ));
 
-    let mut lane_colliders = Vec::new();
-    for i in 0..5 {
-        let node_handle: Handle<GltfNode> = asset_server.load(format!("models/lane.gltf#Node{i}"));
-        let node = nodes.get(&node_handle).unwrap();
+    let lane_models = LaneModels {
+        basic_floor: nodes
+            .get(&asset_server.load("models/lane.gltf#Node0"))
+            .unwrap(),
+        hole_floor: nodes
+            .get(&asset_server.load("models/lane.gltf#Node2"))
+            .unwrap(),
+        wall: nodes
+            .get(&asset_server.load("models/lane.gltf#Node1"))
+            .unwrap(),
+    };
 
-        lane_colliders.push(collision::create_collider_from_gltf_node(
-            node,
-            &gltf_meshes,
-            &meshes,
-        ));
-    }
+    for ((sx, sz), part) in lanes.level1.0.clone() {
+        let node = match part {
+            LanePart::BasicFloor => lane_models.basic_floor,
+            LanePart::HoleFloor => lane_models.hole_floor,
+            LanePart::Wall(_) => lane_models.wall,
+        };
+        let mesh = node.mesh.as_ref().unwrap();
+        let gltf_mesh = gltf_meshes.get(mesh).unwrap();
 
-    commands
-        .spawn((
-            RigidBody::Fixed,
-            SceneBundle {
-                scene: asset_server.load("models/lane.gltf#Scene0"),
-                transform: Transform::from_xyz(0.0, 0.3, 0.0)
-                    .with_rotation(Quat::from_rotation_y(-PI / 2.0))
-                    .with_scale(Vec3::new(0.5, 0.5, 0.5)),
-                ..default()
-            },
-            Friction::new(1.0),
-        ))
-        .with_children(|parent| {
-            for lane_collider in lane_colliders {
-                parent.spawn((lane_collider, TransformBundle::IDENTITY));
+        let collider = collision::create_collider_from_gltf_node(node, &gltf_meshes, &meshes, true);
+        let extra_transform = match part {
+            LanePart::BasicFloor => Transform::IDENTITY * Transform::from_xyz(0.0, 0.025, 0.0),
+            LanePart::HoleFloor => Transform::IDENTITY * Transform::from_xyz(0.0, 0.025, 0.0),
+            LanePart::Wall(dir) => {
+                let rot_transform = match dir {
+                    Direction::Up => Transform::IDENTITY,
+                    Direction::Left => Transform::from_rotation(Quat::from_rotation_y(-PI / 2.0)),
+                    Direction::Down => Transform::from_rotation(Quat::from_rotation_y(PI)),
+                    Direction::Right => Transform::from_rotation(Quat::from_rotation_y(PI / 2.0)),
+                };
+                rot_transform * Transform::from_xyz(0.2, 0.05, 0.0)
             }
-        });
+        };
 
-    commands.spawn((
-        Collider::cylinder(0.02, 0.05),
-        TransformBundle::from_transform(Transform::from_xyz(10.0, 0.3 - 0.025 + 0.03, 0.0)),
-        Sensor,
-        Hole,
-    ));
+        commands
+            .spawn((
+                RigidBody::Fixed,
+                MaterialMeshBundle {
+                    mesh: gltf_mesh.primitives[0].mesh.clone(),
+                    material: gltf_mesh.primitives[0].material.as_ref().unwrap().clone(),
+                    transform: Transform::from_xyz(sx as f32 * 0.4, 0.3, sz as f32 * 0.4)
+                        .with_rotation(Quat::from_rotation_y(-PI / 2.0))
+                        * extra_transform
+                        * node.transform.with_translation(Vec3::ZERO),
+                    ..default()
+                },
+                Friction::new(1.0),
+            ))
+            .with_children(|parent| {
+                parent.spawn((collider, TransformBundle::IDENTITY));
+            });
+
+        if part == LanePart::HoleFloor {
+            commands.spawn((
+                Collider::cylinder(0.02, 0.05),
+                TransformBundle::from_transform(Transform::from_xyz(
+                    sx as f32 * 0.4,
+                    0.3 - 0.025 + 0.03,
+                    sz as f32 * 0.4,
+                )),
+                Sensor,
+                Hole,
+            ));
+        }
+    }
 
     let mut rng = rand::thread_rng();
     for player_id in 0..game_state.num_players {
