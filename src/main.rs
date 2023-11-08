@@ -4,7 +4,8 @@ use bevy::{
     gltf::{GltfMesh, GltfNode},
     input::mouse::{MouseMotion, MouseWheel},
     pbr::DirectionalLightShadowMap,
-    prelude::*, scene::SceneInstance,
+    prelude::*,
+    scene::SceneInstance,
 };
 use bevy_rapier3d::{prelude::*, render::RapierDebugRenderPlugin};
 use rand::Rng;
@@ -56,6 +57,7 @@ fn main() {
                 update_shoot_power_indicator,
                 check_ball_in_hole,
                 customize_scene_materials,
+                stop_ball_from_spinning_forever,
             ),
         );
 
@@ -121,6 +123,14 @@ struct AssetsLoading(Vec<HandleUntyped>);
 
 fn load_assets(server: Res<AssetServer>, mut loading: ResMut<AssetsLoading>) {
     let scene: Handle<Scene> = server.load("models/lane.gltf#Scene0");
+    loading.0.push(scene.clone_untyped());
+    let scene: Handle<Scene> = server.load("models/sphere.gltf#Scene0");
+    loading.0.push(scene.clone_untyped());
+    let scene: Handle<Scene> = server.load("models/cube.gltf#Scene0");
+    loading.0.push(scene.clone_untyped());
+    let scene: Handle<Scene> = server.load("models/torus.gltf#Scene0");
+    loading.0.push(scene.clone_untyped());
+    let scene: Handle<Scene> = server.load("models/cone.gltf#Scene0");
     loading.0.push(scene.clone_untyped());
 }
 
@@ -202,6 +212,7 @@ fn load_level(
                     .with_scale(Vec3::new(0.5, 0.5, 0.5)),
                 ..default()
             },
+            Friction::new(1.0),
         ))
         .with_children(|parent| {
             for lane_collider in lane_colliders {
@@ -218,6 +229,11 @@ fn load_level(
 
     let mut rng = rand::thread_rng();
     for player_id in 0..game_state.num_players {
+        let shape = match rng.gen_range(0..=2) {
+            0 => BallShape::Sphere,
+            1 => BallShape::Cube,
+            _ => BallShape::Cone,
+        };
         spawn_ball(
             &mut commands,
             &asset_server,
@@ -225,6 +241,7 @@ fn load_level(
             rng.gen_range(-0.4..0.4),
             rng.gen_range(-0.4..0.0),
             Color::hsl(rng.gen_range(0.0..360.0), 1.0, 0.5),
+            shape,
         );
     }
 
@@ -258,13 +275,22 @@ fn customize_scene_materials(
         // Iterate over all entities in scene (once it's loaded)
         let mut handles = handles.iter_many_mut(scene_manager.iter_instance_entities(**instance));
         while let Some((_, mut material_handle)) = handles.fetch_next() {
-            let Some(material) = pbr_materials.get(&material_handle) else { continue; };
+            let Some(material) = pbr_materials.get(&material_handle) else {
+                continue;
+            };
             let mut new_material = material.clone();
             new_material.base_color = requesed_change.0;
 
             *material_handle = pbr_materials.add(new_material);
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BallShape {
+    Sphere,
+    Cube,
+    Cone,
 }
 
 fn spawn_ball(
@@ -274,19 +300,52 @@ fn spawn_ball(
     offset_sideways: f32,
     offset_along: f32,
     color: Color,
+    shape: BallShape,
 ) {
-    let scene_handle = asset_server.load("models/sphere.gltf#Scene0");
-    
+    let model_file = match shape {
+        BallShape::Sphere => "sphere",
+        BallShape::Cube => "cube",
+        BallShape::Cone => "cone",
+    };
+    let scene_handle = asset_server.load(format!("models/{}.gltf#Scene0", model_file));
+    //let node_handle = asset_server.load("models/sphere.gltf#Node0");
+
+    let collider = match shape {
+        BallShape::Sphere => Collider::ball(0.025),
+        BallShape::Cube => Collider::cuboid(0.025, 0.025, 0.025),
+        BallShape::Cone => Collider::cone(0.025, 0.025),
+    };
+
+    let r = 0.025;
+    let density = 1.0;
+    let mass = r * r * r * 8.0 * density;
+
+    let principal_inertia = Vec3::new(1.0, 1.0, 1.0) * 3.0 / 10.0 * r * r * mass;
+
     commands
         .spawn((
             RigidBody::Dynamic,
-            Collider::ball(0.025),
+            collider,
             ExternalImpulse::default(),
-            Restitution::coefficient(0.7),
-            Friction::new(1.0),
+            ExternalForce::default(),
+            Restitution {
+                coefficient: 0.5,
+                combine_rule: CoefficientCombineRule::Max,
+            },
+            Friction {
+                coefficient: 1.0,
+                combine_rule: CoefficientCombineRule::Max,
+            },
+            ColliderMassProperties::MassProperties(MassProperties {
+                local_center_of_mass: Vec3::ZERO,
+                mass,
+                principal_inertia_local_frame: Quat::IDENTITY,
+                principal_inertia,
+            }),
+            ReadMassProperties::default(),
             Damping {
-                linear_damping: 0.95,
-                angular_damping: 0.95,
+                linear_damping: 0.4,
+                angular_damping: 0.9,
             },
             Ccd::enabled(),
         ))
@@ -296,13 +355,24 @@ fn spawn_ball(
         })
         .insert(SceneBundle {
             scene: scene_handle,
-            transform: Transform::from_xyz(0.0, 1.0, 0.0)
-                * Transform::from_xyz(offset_along, 0.0, offset_sideways),
+            transform: Transform::from_xyz(offset_along, 1.0, offset_sideways)
+                * Transform::from_rotation(Quat::from_rotation_x(PI / 3.0)),
             ..default()
         })
         .insert(NeedsColorChange(color))
         .insert(Ball { player_id, hits: 0 })
         .insert(ShootSettings::default());
+}
+
+fn stop_ball_from_spinning_forever(
+    mut q_ball: Query<(&mut ExternalImpulse, &Velocity, &ReadMassProperties), With<Ball>>,
+) {
+    for (mut f, vel, mass) in q_ball.iter_mut() {
+        if vel.linvel.length() < 0.025 {
+            f.impulse -= vel.linvel * mass.0.mass * 0.9;
+            f.torque_impulse = -vel.angvel * mass.0.principal_inertia * 0.9;
+        }
+    }
 }
 
 fn check_ball_in_hole(
@@ -314,6 +384,12 @@ fn check_ball_in_hole(
 ) {
     for hole_entity in q_hole.iter() {
         for (ball_entity, ball_velocity, ball) in q_ball.iter() {
+            println!(
+                "{:?}: {:?} - {:?}",
+                ball_entity,
+                ball_velocity.linvel.length(),
+                ball_velocity.angvel.length()
+            );
             if ball_velocity.linvel.length() < 0.01
                 && rapier_context.intersection_pair(hole_entity, ball_entity) == Some(true)
             {
@@ -408,15 +484,16 @@ fn keyboard_input(
     keys: Res<Input<KeyCode>>,
     mut q_ball: Query<(
         &mut ExternalImpulse,
+        &ReadMassProperties,
         &Velocity,
         &mut ShootSettings,
         &mut Ball,
     )>,
     game_state: Res<GameState>,
 ) {
-    if let Some((mut ball_impulse, &ball_velocity, mut shoot, mut ball)) = q_ball
+    if let Some((mut ball_impulse, &ball_mass, &ball_velocity, mut shoot, mut ball)) = q_ball
         .iter_mut()
-        .find(|(_, _, _, ball)| ball.player_id == game_state.current_player)
+        .find(|(_, _, _, _, ball)| ball.player_id == game_state.current_player)
     {
         if ball_velocity.linvel.length() < 0.01 {
             let max_power = 10.0;
@@ -467,13 +544,13 @@ fn keyboard_input(
                 let transform = Transform::from_rotation(rot);
                 let dir = transform * Vec3::X;
 
-                let power_multiplier = 1.0e-4;
+                let power_multiplier = 1.0 * ball_mass.0.mass;
                 let shot = dir * shoot.power * power_multiplier;
                 ball_impulse.impulse.x += shot.x;
                 ball_impulse.impulse.y += shot.y;
                 ball_impulse.impulse.z += shot.z;
 
-                let torqe_magnitude = 1.0e-3;
+                let torqe_magnitude = 1.0 * ball_mass.0.mass;
                 let torque_amount = match shoot.spin {
                     Some(BallSpin::Left) => -torqe_magnitude,
                     Some(BallSpin::Right) => torqe_magnitude,
@@ -486,7 +563,7 @@ fn keyboard_input(
 
                 *shoot = ShootSettings::default();
             } else if ball_velocity.linvel.y.abs() <= 0.05 {
-                ball_impulse.impulse.y += 5.0e-4;
+                ball_impulse.impulse.y += 7.0 * ball_mass.0.mass;
             }
         }
     }
