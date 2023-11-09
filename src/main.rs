@@ -5,7 +5,8 @@ use bevy::{
     input::mouse::{MouseMotion, MouseWheel},
     pbr::DirectionalLightShadowMap,
     prelude::*,
-    scene::SceneInstance, utils::HashSet,
+    scene::SceneInstance,
+    utils::HashSet,
 };
 use bevy_rapier3d::{prelude::*, render::RapierDebugRenderPlugin};
 use rand::Rng;
@@ -17,9 +18,7 @@ mod collision;
 
 const BACKGROUND_COLOR: Color = Color::rgb(0.9, 0.9, 0.9);
 
-const USE_BIGGUS_DICKUS: bool = false;
-
-const NUM_PLAYERS: u32 = if USE_BIGGUS_DICKUS { 1 } else { 4 };
+const NUM_PLAYERS: u32 = 4;
 
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Hash, States)]
 enum AppState {
@@ -63,6 +62,7 @@ fn main() {
                 check_ball_in_hole,
                 customize_scene_materials,
                 stop_ball_from_spinning_forever,
+                check_ball_on_ground,
             ),
         );
 
@@ -102,17 +102,13 @@ struct Hole;
 struct LaneConfig(Vec<((i32, i32), LanePart)>);
 
 impl LaneConfig {
-    fn with(mut self, tiles: &[((i32, i32), LanePart)]) -> Self {
-        self.0.extend(tiles);
-        self
-    }
-
     fn with_3x3(mut self, cx: i32, cy: i32, around: LanePart, center: LanePart) -> Self {
         for dx in -1..=1 {
             for dy in -1..=1 {
                 let x = cx + dx;
                 let y = cy + dy;
-                self.0.push(((x, y), if dx == 0 && dy == 0 { center } else { around }));
+                self.0
+                    .push(((x, y), if dx == 0 && dy == 0 { center } else { around }));
             }
         }
         self
@@ -120,21 +116,23 @@ impl LaneConfig {
 
     fn with_walls_around(mut self) -> Self {
         let mut walls: Vec<(i32, i32, Direction)> = Vec::new();
-        let grass: HashSet<_> = self.0.iter()
+        let grass: HashSet<_> = self
+            .0
+            .iter()
             .filter(|(_, part)| *part == LanePart::BasicFloor || *part == LanePart::HoleFloor)
             .map(|(pos, _)| *pos)
             .collect();
         for (x, y) in grass.iter() {
-            if !grass.contains(&(*x+1, *y)) {
+            if !grass.contains(&(*x + 1, *y)) {
                 walls.push((*x, *y, Direction::Right));
             }
-            if !grass.contains(&(*x-1, *y)) {
+            if !grass.contains(&(*x - 1, *y)) {
                 walls.push((*x, *y, Direction::Left));
             }
-            if !grass.contains(&(*x, *y+1)) {
+            if !grass.contains(&(*x, *y + 1)) {
                 walls.push((*x, *y, Direction::Up));
             }
-            if !grass.contains(&(*x, *y-1)) {
+            if !grass.contains(&(*x, *y - 1)) {
                 walls.push((*x, *y, Direction::Down));
             }
         }
@@ -185,6 +183,7 @@ impl GameState {
 
 #[derive(Default)]
 struct PlayerData {
+    last_pos: Vec3,
     scores: Vec<u32>,
 }
 
@@ -355,12 +354,12 @@ fn load_level(
 
     let mut rng = rand::thread_rng();
     for player_id in 0..game_state.num_players {
-        let shape = match rng.gen_range(0..=2) {
+        let shape = match rng.gen_range(0..=3) {
             0 => BallShape::Sphere,
             1 => BallShape::Cube,
-            _ => BallShape::Cone,
+            2 => BallShape::Cone,
+            _ => BallShape::BiggusDickus,
         };
-        let shape = if USE_BIGGUS_DICKUS { BallShape::BiggusDickus } else { shape };
 
         spawn_ball(
             &mut commands,
@@ -445,14 +444,28 @@ fn spawn_ball(
     };
     let scene_handle = asset_server.load(format!("models/{}.gltf#Scene0", model_file));
 
+    let rr = 0.01; // rounding radius
+
     let collider = match shape {
         BallShape::Sphere => Collider::ball(0.025),
-        BallShape::Cube => Collider::cuboid(0.025, 0.025, 0.025),
-        BallShape::Cone => Collider::cone(0.025, 0.025),
+        BallShape::Cube => Collider::round_cuboid(0.025 - rr, 0.025 - rr, 0.025 - rr, rr),
+        BallShape::Cone => Collider::round_cone(0.025 - rr, 0.025 - rr, rr),
         BallShape::BiggusDickus => Collider::compound(vec![
-            (Vec3::new(0.0, 0.25 + 0.5, 0.0), Quat::from_rotation_x(-0.02), Collider::cylinder(2.8 - 0.5, 0.7)),
-            (Vec3::new(0.7, -2.0, 1.0), Quat::IDENTITY, Collider::ball(0.6)),
-            (Vec3::new(-0.7, -2.0, 1.0), Quat::IDENTITY, Collider::ball(0.6)),
+            (
+                Vec3::new(0.0, 0.25 + 0.5, 0.0),
+                Quat::from_rotation_x(-0.02),
+                Collider::round_cylinder(2.8 - 0.5 - rr, 0.7 - rr, rr),
+            ),
+            (
+                Vec3::new(0.7, -2.0, 1.0),
+                Quat::IDENTITY,
+                Collider::ball(0.6),
+            ),
+            (
+                Vec3::new(-0.7, -2.0, 1.0),
+                Quat::IDENTITY,
+                Collider::ball(0.6),
+            ),
         ]),
     };
 
@@ -462,7 +475,7 @@ fn spawn_ball(
     };
 
     let r = 0.025;
-    let density = 1.0;
+    let density = 4.0;
     let mass = r * r * r * 8.0 * density;
 
     let principal_inertia = Vec3::new(1.0, 1.0, 1.0) * 3.0 / 10.0 * r * r * mass;
@@ -489,7 +502,7 @@ fn spawn_ball(
             }),
             ReadMassProperties::default(),
             Damping {
-                linear_damping: 0.4,
+                linear_damping: 0.6,
                 angular_damping: 0.9,
             },
             Ccd::enabled(),
@@ -501,7 +514,7 @@ fn spawn_ball(
         .insert(SceneBundle {
             scene: scene_handle,
             transform: Transform::from_xyz(offset_along, 1.0, offset_sideways)
-                * Transform::from_rotation(Quat::from_rotation_x(PI / 3.0)).with_scale(Vec3::ONE / model_oversize),
+                    .with_scale(Vec3::ONE / model_oversize),
             ..default()
         })
         .insert(NeedsColorChange(color))
@@ -513,7 +526,7 @@ fn stop_ball_from_spinning_forever(
     mut q_ball: Query<(&mut ExternalImpulse, &Velocity, &ReadMassProperties), With<Ball>>,
 ) {
     for (mut f, vel, mass) in q_ball.iter_mut() {
-        if vel.linvel.length() < 0.025 {
+        if vel.linvel.length() < 0.05 {
             f.impulse -= vel.linvel * mass.0.mass * 0.9;
             f.torque_impulse = -vel.angvel * mass.0.principal_inertia * 0.9;
         }
@@ -529,12 +542,6 @@ fn check_ball_in_hole(
 ) {
     for hole_entity in q_hole.iter() {
         for (ball_entity, ball_velocity, ball) in q_ball.iter() {
-            println!(
-                "{:?}: {:?} - {:?}",
-                ball_entity,
-                ball_velocity.linvel.length(),
-                ball_velocity.angvel.length()
-            );
             if ball_velocity.linvel.length() < 0.01
                 && rapier_context.intersection_pair(hole_entity, ball_entity) == Some(true)
             {
@@ -552,6 +559,14 @@ fn check_ball_in_hole(
                     println!("Level 1 completed!");
                 }
             }
+        }
+    }
+}
+
+fn check_ball_on_ground(mut q_ball: Query<(&mut Transform, &Velocity, &Ball)>, game_state: Res<GameState>) {
+    for (mut ball_transform, ball_velocity, ball) in q_ball.iter_mut() {
+        if ball_velocity.linvel.length() < 0.01 && ball_transform.translation.y < 0.34 {
+            ball_transform.translation = game_state.players[ball.player_id as usize].last_pos + Vec3::Y;
         }
     }
 }
@@ -630,15 +645,20 @@ fn keyboard_input(
     mut q_ball: Query<(
         &mut ExternalImpulse,
         &ReadMassProperties,
+        &Transform,
         &Velocity,
         &mut ShootSettings,
         &mut Ball,
     )>,
-    game_state: Res<GameState>,
+    mut game_state: ResMut<GameState>,
 ) {
-    if let Some((mut ball_impulse, &ball_mass, &ball_velocity, mut shoot, mut ball)) = q_ball
+    if keys.just_pressed(KeyCode::C) || keys.just_pressed(KeyCode::N) {
+        game_state.current_player = (game_state.current_player + 1) % game_state.num_players;
+    }
+
+    if let Some((mut ball_impulse, &ball_mass, ball_transform, &ball_velocity, mut shoot, mut ball)) = q_ball
         .iter_mut()
-        .find(|(_, _, _, _, ball)| ball.player_id == game_state.current_player)
+        .find(|(_, _, _, _, _, ball)| ball.player_id == game_state.current_player)
     {
         if ball_velocity.linvel.length() < 0.01 {
             let max_power = 10.0;
@@ -672,7 +692,10 @@ fn keyboard_input(
                 }
             }
             if keys.just_pressed(KeyCode::Escape) {
-                *shoot = ShootSettings::default();
+                *shoot = ShootSettings {
+                    angle: shoot.angle,
+                    ..ShootSettings::default()
+                };
             }
 
             shoot.power = shoot.power.max(0.0).min(max_power);
@@ -684,7 +707,7 @@ fn keyboard_input(
         }
 
         if keys.just_pressed(KeyCode::Space) {
-            if ball_velocity.linvel.length() < 0.01 && *shoot != ShootSettings::default() {
+            if ball_velocity.linvel.length() < 0.01 && shoot.power > 0.0 {
                 let rot = Quat::from_euler(EulerRot::XYZ, 0.0, shoot.angle, 0.0);
                 let transform = Transform::from_rotation(rot);
                 let dir = transform * Vec3::X;
@@ -705,8 +728,12 @@ fn keyboard_input(
                 ball_impulse.torque_impulse.x += torque_amount;
 
                 ball.hits += 1;
+                game_state.players[ball.player_id as usize].last_pos = ball_transform.translation;
 
-                *shoot = ShootSettings::default();
+                *shoot = ShootSettings {
+                    angle: shoot.angle,
+                    ..ShootSettings::default()
+                };
             } else if ball_velocity.linvel.y.abs() <= 0.05 {
                 ball_impulse.impulse.y += 7.0 * ball_mass.0.mass;
             }
