@@ -4,10 +4,12 @@
     <style>
       body {
         background: #222;
+        color: white;
       }
     </style>
     <title>Pico Golf</title>
   </head>
+  <canvas id="app">Canvas not supported</canvas>
   <script type="module">
     import './restart-audio.js'
     import init from './game/golf.js'
@@ -18,4 +20,15 @@
       }
     });
   </script>
+
+  <div>
+    <h3>Controls:</h3>
+    <pre>
+W, A, S, D - set power and angle
+Q, E - toggle rotation (experimental)
+SPACE - shoot or jump
+C or N - change players
+Left mouse button - rotate view
+    </pre>
+  </div>
 </html>

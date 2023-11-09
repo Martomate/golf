@@ -34,36 +34,43 @@ fn main() {
 
     let mut app = App::new();
 
-    app.add_plugins(DefaultPlugins)
-        .add_plugins(RapierPhysicsPlugin::<NoUserData>::default())
-        .add_state::<AppState>()
-        .insert_resource(ClearColor(BACKGROUND_COLOR))
-        .insert_resource(AmbientLight {
-            color: Color::WHITE,
-            brightness: 1.0 / 4.0f32,
-        })
-        .insert_resource(DirectionalLightShadowMap { size: 4096 })
-        .insert_resource(FixedTime::new_from_secs(1.0 / 60.0))
-        .insert_resource(AssetsLoading::default())
-        .insert_resource(GameState::new(NUM_PLAYERS))
-        .insert_resource(Lanes::default())
-        .add_systems(Startup, setup_graphics)
-        .add_systems(OnEnter(AppState::Loading), load_assets)
-        .add_systems(OnEnter(AppState::InGame), (load_level, spawn_balls))
-        .add_systems(
-            Update,
-            (
-                check_assets_ready,
-                camera_input,
-                move_camera_to_ball,
-                keyboard_input,
-                update_shoot_power_indicator,
-                check_ball_in_hole,
-                customize_scene_materials,
-                stop_ball_from_spinning_forever,
-                check_ball_on_ground,
-            ),
-        );
+    app.add_plugins(DefaultPlugins.set(WindowPlugin {
+        primary_window: Some(Window {
+            title: "Golf".to_string(),
+            canvas: Some("#app".to_string()),
+            ..default()
+        }),
+        ..default()
+    }))
+    .add_plugins(RapierPhysicsPlugin::<NoUserData>::default())
+    .add_state::<AppState>()
+    .insert_resource(ClearColor(BACKGROUND_COLOR))
+    .insert_resource(AmbientLight {
+        color: Color::WHITE,
+        brightness: 1.0 / 4.0f32,
+    })
+    .insert_resource(DirectionalLightShadowMap { size: 4096 })
+    .insert_resource(FixedTime::new_from_secs(1.0 / 60.0))
+    .insert_resource(AssetsLoading::default())
+    .insert_resource(GameState::new(NUM_PLAYERS))
+    .insert_resource(Lanes::default())
+    .add_systems(Startup, setup_graphics)
+    .add_systems(OnEnter(AppState::Loading), load_assets)
+    .add_systems(OnEnter(AppState::InGame), (load_level, spawn_balls))
+    .add_systems(
+        Update,
+        (
+            check_assets_ready,
+            camera_input,
+            move_camera_to_ball,
+            keyboard_input,
+            update_shoot_power_indicator,
+            check_ball_in_hole,
+            customize_scene_materials,
+            stop_ball_from_spinning_forever,
+            check_ball_on_ground,
+        ),
+    );
 
     if cfg!(debug_assertions) {
         app.add_plugins(RapierDebugRenderPlugin::default());
