@@ -4,7 +4,7 @@ use bevy::{
 };
 use bevy_rapier3d::{
     prelude::*,
-    rapier::prelude::{Isometry, SharedShape}, na::Translation,
+    rapier::prelude::{Isometry, SharedShape},
 };
 
 pub fn create_collider_from_gltf_node(

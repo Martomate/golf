@@ -1,4 +1,4 @@
-use std::{f32::consts::PI, ops::Add};
+use std::f32::consts::PI;
 
 use bevy::{
     gltf::{GltfMesh, GltfNode},
@@ -16,6 +16,10 @@ mod collision;
 // Using the default 2D camera they correspond 1:1 with screen pixels.
 
 const BACKGROUND_COLOR: Color = Color::rgb(0.9, 0.9, 0.9);
+
+const USE_BIGGUS_DICKUS: bool = false;
+
+const NUM_PLAYERS: u32 = if USE_BIGGUS_DICKUS { 1 } else { 4 };
 
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Hash, States)]
 enum AppState {
@@ -42,7 +46,7 @@ fn main() {
         .insert_resource(DirectionalLightShadowMap { size: 4096 })
         .insert_resource(FixedTime::new_from_secs(1.0 / 60.0))
         .insert_resource(AssetsLoading::default())
-        .insert_resource(GameState::new(4))
+        .insert_resource(GameState::new(NUM_PLAYERS))
         .insert_resource(Lanes::default())
         .add_systems(Startup, setup_graphics)
         .add_systems(OnEnter(AppState::Loading), load_assets)
@@ -103,6 +107,17 @@ impl LaneConfig {
         self
     }
 
+    fn with_3x3(mut self, cx: i32, cy: i32, around: LanePart, center: LanePart) -> Self {
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                let x = cx + dx;
+                let y = cy + dy;
+                self.0.push(((x, y), if dx == 0 && dy == 0 { center } else { around }));
+            }
+        }
+        self
+    }
+
     fn with_walls_around(mut self) -> Self {
         let mut walls: Vec<(i32, i32, Direction)> = Vec::new();
         let grass: HashSet<_> = self.0.iter()
@@ -139,11 +154,13 @@ impl Default for Lanes {
     fn default() -> Self {
         Self {
             level1: LaneConfig::default()
-                .with(&[((1, 1), LanePart::HoleFloor)])
-                .with(&[
-                    ((0, 0), LanePart::BasicFloor),
-                    ((0, 1), LanePart::BasicFloor),
-                ])
+                .with_3x3(0, 0, LanePart::BasicFloor, LanePart::BasicFloor)
+                .with_3x3(0, 3, LanePart::BasicFloor, LanePart::BasicFloor)
+                .with_3x3(0, 6, LanePart::BasicFloor, LanePart::BasicFloor)
+                .with_3x3(0, 9, LanePart::BasicFloor, LanePart::BasicFloor)
+                .with_3x3(3, 9, LanePart::BasicFloor, LanePart::BasicFloor)
+                .with_3x3(6, 9, LanePart::BasicFloor, LanePart::BasicFloor)
+                .with_3x3(6, 12, LanePart::BasicFloor, LanePart::HoleFloor)
                 .with_walls_around(),
         }
     }
@@ -183,6 +200,7 @@ fn load_assets(server: Res<AssetServer>, mut loading: ResMut<AssetsLoading>) {
         "models/sphere.gltf#Scene0",
         "models/cube.gltf#Scene0",
         "models/cone.gltf#Scene0",
+        "models/biggus_dickus.gltf#Scene0",
     ] {
         let scene: Handle<Scene> = server.load(path);
         loading.0.push(scene.clone_untyped());
@@ -204,7 +222,7 @@ fn check_assets_ready(
 fn setup_graphics(mut commands: Commands) {
     commands.spawn((
         CameraController {
-            rotation: Quat::from_rotation_y(-PI * 0.5),
+            rotation: Quat::from_rotation_y(PI),
             zoom: 0.0,
         },
         Camera3dBundle {
@@ -342,9 +360,14 @@ fn load_level(
             1 => BallShape::Cube,
             _ => BallShape::Cone,
         };
+        let shape = if USE_BIGGUS_DICKUS { BallShape::BiggusDickus } else { shape };
+
         spawn_ball(
             &mut commands,
             &asset_server,
+            &nodes,
+            &gltf_meshes,
+            &meshes,
             player_id,
             rng.gen_range(-0.4..0.4),
             rng.gen_range(-0.4..0.0),
@@ -399,11 +422,15 @@ enum BallShape {
     Sphere,
     Cube,
     Cone,
+    BiggusDickus,
 }
 
 fn spawn_ball(
     commands: &mut Commands,
     asset_server: &AssetServer,
+    nodes: &Assets<GltfNode>,
+    gltf_meshes: &Assets<GltfMesh>,
+    meshes: &Assets<Mesh>,
     player_id: u32,
     offset_sideways: f32,
     offset_along: f32,
@@ -414,14 +441,24 @@ fn spawn_ball(
         BallShape::Sphere => "sphere",
         BallShape::Cube => "cube",
         BallShape::Cone => "cone",
+        BallShape::BiggusDickus => "biggus_dickus",
     };
     let scene_handle = asset_server.load(format!("models/{}.gltf#Scene0", model_file));
-    //let node_handle = asset_server.load("models/sphere.gltf#Node0");
 
     let collider = match shape {
         BallShape::Sphere => Collider::ball(0.025),
         BallShape::Cube => Collider::cuboid(0.025, 0.025, 0.025),
         BallShape::Cone => Collider::cone(0.025, 0.025),
+        BallShape::BiggusDickus => Collider::compound(vec![
+            (Vec3::new(0.0, 0.25 + 0.5, 0.0), Quat::from_rotation_x(-0.02), Collider::cylinder(2.8 - 0.5, 0.7)),
+            (Vec3::new(0.7, -2.0, 1.0), Quat::IDENTITY, Collider::ball(0.6)),
+            (Vec3::new(-0.7, -2.0, 1.0), Quat::IDENTITY, Collider::ball(0.6)),
+        ]),
+    };
+
+    let model_oversize = match shape {
+        BallShape::BiggusDickus => 2.5 / 0.05,
+        _ => 1.0,
     };
 
     let r = 0.025;
@@ -464,7 +501,7 @@ fn spawn_ball(
         .insert(SceneBundle {
             scene: scene_handle,
             transform: Transform::from_xyz(offset_along, 1.0, offset_sideways)
-                * Transform::from_rotation(Quat::from_rotation_x(PI / 3.0)),
+                * Transform::from_rotation(Quat::from_rotation_x(PI / 3.0)).with_scale(Vec3::ONE / model_oversize),
             ..default()
         })
         .insert(NeedsColorChange(color))
