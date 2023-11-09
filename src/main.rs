@@ -16,7 +16,7 @@ mod collision;
 // These constants are defined in `Transform` units.
 // Using the default 2D camera they correspond 1:1 with screen pixels.
 
-const BACKGROUND_COLOR: Color = Color::rgb(0.9, 0.9, 0.9);
+const BACKGROUND_COLOR: Color = Color::rgb(0.5, 0.8, 1.0);
 
 const NUM_PLAYERS: u32 = 4;
 
@@ -49,8 +49,7 @@ fn main() {
         .insert_resource(Lanes::default())
         .add_systems(Startup, setup_graphics)
         .add_systems(OnEnter(AppState::Loading), load_assets)
-        .add_systems(OnEnter(AppState::InGame), load_level)
-        // Add our gameplay simulation systems to the fixed timestep schedule
+        .add_systems(OnEnter(AppState::InGame), (load_level, spawn_balls))
         .add_systems(
             Update,
             (
@@ -115,13 +114,14 @@ impl LaneConfig {
     }
 
     fn with_walls_around(mut self) -> Self {
-        let mut walls: Vec<(i32, i32, Direction)> = Vec::new();
         let grass: HashSet<_> = self
             .0
             .iter()
             .filter(|(_, part)| *part == LanePart::BasicFloor || *part == LanePart::HoleFloor)
             .map(|(pos, _)| *pos)
             .collect();
+
+        let mut walls: Vec<(i32, i32, Direction)> = Vec::new();
         for (x, y) in grass.iter() {
             if !grass.contains(&(*x + 1, *y)) {
                 walls.push((*x, *y, Direction::Right));
@@ -136,9 +136,11 @@ impl LaneConfig {
                 walls.push((*x, *y, Direction::Down));
             }
         }
+
         for &(x, y, dir) in walls.iter() {
             self.0.push(((x, y), LanePart::Wall(dir)));
         }
+
         self
     }
 }
@@ -171,6 +173,12 @@ struct GameState {
     players: Vec<PlayerData>,
 }
 
+#[derive(Default)]
+struct PlayerData {
+    last_pos: Vec3,
+    scores: Vec<u32>,
+}
+
 impl GameState {
     fn new(num_players: u32) -> Self {
         GameState {
@@ -179,12 +187,6 @@ impl GameState {
             players: (0..num_players).map(|_| PlayerData::default()).collect(),
         }
     }
-}
-
-#[derive(Default)]
-struct PlayerData {
-    last_pos: Vec3,
-    scores: Vec<u32>,
 }
 
 #[derive(Component)]
@@ -273,9 +275,7 @@ fn load_level(
     asset_server: Res<AssetServer>,
     nodes: Res<Assets<GltfNode>>,
     gltf_meshes: Res<Assets<GltfMesh>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    game_state: Res<GameState>,
+    meshes: Res<Assets<Mesh>>,
     lanes: Res<Lanes>,
 ) {
     commands.spawn((
@@ -351,7 +351,15 @@ fn load_level(
             ));
         }
     }
+}
 
+fn spawn_balls(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    game_state: Res<GameState>,
+) {
     let mut rng = rand::thread_rng();
     for player_id in 0..game_state.num_players {
         let shape = match rng.gen_range(0..=3) {
@@ -364,9 +372,6 @@ fn load_level(
         spawn_ball(
             &mut commands,
             &asset_server,
-            &nodes,
-            &gltf_meshes,
-            &meshes,
             player_id,
             rng.gen_range(-0.4..0.4),
             rng.gen_range(-0.4..0.0),
@@ -427,9 +432,6 @@ enum BallShape {
 fn spawn_ball(
     commands: &mut Commands,
     asset_server: &AssetServer,
-    nodes: &Assets<GltfNode>,
-    gltf_meshes: &Assets<GltfMesh>,
-    meshes: &Assets<Mesh>,
     player_id: u32,
     offset_sideways: f32,
     offset_along: f32,
@@ -514,7 +516,7 @@ fn spawn_ball(
         .insert(SceneBundle {
             scene: scene_handle,
             transform: Transform::from_xyz(offset_along, 1.0, offset_sideways)
-                    .with_scale(Vec3::ONE / model_oversize),
+                .with_scale(Vec3::ONE / model_oversize),
             ..default()
         })
         .insert(NeedsColorChange(color))
@@ -563,10 +565,14 @@ fn check_ball_in_hole(
     }
 }
 
-fn check_ball_on_ground(mut q_ball: Query<(&mut Transform, &Velocity, &Ball)>, game_state: Res<GameState>) {
+fn check_ball_on_ground(
+    mut q_ball: Query<(&mut Transform, &Velocity, &Ball)>,
+    game_state: Res<GameState>,
+) {
     for (mut ball_transform, ball_velocity, ball) in q_ball.iter_mut() {
         if ball_velocity.linvel.length() < 0.01 && ball_transform.translation.y < 0.34 {
-            ball_transform.translation = game_state.players[ball.player_id as usize].last_pos + Vec3::Y;
+            ball_transform.translation =
+                game_state.players[ball.player_id as usize].last_pos + Vec3::Y;
         }
     }
 }
@@ -656,7 +662,14 @@ fn keyboard_input(
         game_state.current_player = (game_state.current_player + 1) % game_state.num_players;
     }
 
-    if let Some((mut ball_impulse, &ball_mass, ball_transform, &ball_velocity, mut shoot, mut ball)) = q_ball
+    if let Some((
+        mut ball_impulse,
+        &ball_mass,
+        ball_transform,
+        &ball_velocity,
+        mut shoot,
+        mut ball,
+    )) = q_ball
         .iter_mut()
         .find(|(_, _, _, _, _, ball)| ball.player_id == game_state.current_player)
     {
