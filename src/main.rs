@@ -208,7 +208,6 @@ fn load_assets(server: Res<AssetServer>, mut loading: ResMut<AssetsLoading>) {
         "models/sphere.gltf#Scene0",
         "models/cube.gltf#Scene0",
         "models/cone.gltf#Scene0",
-        "models/biggus_dickus.gltf#Scene0",
     ] {
         let scene: Handle<Scene> = server.load(path);
         loading.0.push(scene.clone_untyped());
@@ -369,11 +368,10 @@ fn spawn_balls(
 ) {
     let mut rng = rand::thread_rng();
     for player_id in 0..game_state.num_players {
-        let shape = match rng.gen_range(0..=3) {
+        let shape = match rng.gen_range(0..=2) {
             0 => BallShape::Sphere,
             1 => BallShape::Cube,
-            2 => BallShape::Cone,
-            _ => BallShape::BiggusDickus,
+            _ => BallShape::Cone,
         };
 
         spawn_ball(
@@ -433,7 +431,6 @@ enum BallShape {
     Sphere,
     Cube,
     Cone,
-    BiggusDickus,
 }
 
 fn spawn_ball(
@@ -449,7 +446,6 @@ fn spawn_ball(
         BallShape::Sphere => "sphere",
         BallShape::Cube => "cube",
         BallShape::Cone => "cone",
-        BallShape::BiggusDickus => "biggus_dickus",
     };
     let scene_handle = asset_server.load(format!("models/{}.gltf#Scene0", model_file));
 
@@ -459,29 +455,9 @@ fn spawn_ball(
         BallShape::Sphere => Collider::ball(0.025),
         BallShape::Cube => Collider::round_cuboid(0.025 - rr, 0.025 - rr, 0.025 - rr, rr),
         BallShape::Cone => Collider::round_cone(0.025 - rr, 0.025 - rr, rr),
-        BallShape::BiggusDickus => Collider::compound(vec![
-            (
-                Vec3::new(0.0, 0.25 + 0.5, 0.0),
-                Quat::from_rotation_x(-0.02),
-                Collider::round_cylinder(2.8 - 0.5 - rr, 0.7 - rr, rr),
-            ),
-            (
-                Vec3::new(0.7, -2.0, 1.0),
-                Quat::IDENTITY,
-                Collider::ball(0.6),
-            ),
-            (
-                Vec3::new(-0.7, -2.0, 1.0),
-                Quat::IDENTITY,
-                Collider::ball(0.6),
-            ),
-        ]),
     };
 
-    let model_oversize = match shape {
-        BallShape::BiggusDickus => 2.5 / 0.05,
-        _ => 1.0,
-    };
+    let model_oversize = 1.0;
 
     let r = 0.025;
     let density = 4.0;
