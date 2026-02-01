@@ -50,7 +50,7 @@ fn main() {
         brightness: 1.0 / 4.0f32,
     })
     .insert_resource(DirectionalLightShadowMap { size: 4096 })
-    .insert_resource(FixedTime::new_from_secs(1.0 / 60.0))
+    .insert_resource(Time::from_seconds(1.0 / 60.0))
     .insert_resource(AssetsLoading::default())
     .insert_resource(GameState::new(NUM_PLAYERS))
     .insert_resource(Lanes::default())
@@ -200,17 +200,25 @@ impl GameState {
 struct NeedsColorChange(Color);
 
 #[derive(Resource, Default)]
-struct AssetsLoading(Vec<HandleUntyped>);
+struct AssetsLoading(Vec<UntypedHandle>);
 
 fn load_assets(server: Res<AssetServer>, mut loading: ResMut<AssetsLoading>) {
     for path in [
-        "models/lane.gltf#Scene0",
         "models/sphere.gltf#Scene0",
         "models/cube.gltf#Scene0",
         "models/cone.gltf#Scene0",
     ] {
         let scene: Handle<Scene> = server.load(path);
-        loading.0.push(scene.clone_untyped());
+        loading.0.push(scene.clone().untyped());
+    }
+
+    for path in [
+        "models/lane.gltf#Node0",
+        "models/lane.gltf#Node1",
+        "models/lane.gltf#Node2",
+    ] {
+        let scene: Handle<GltfNode> = server.load(path);
+        loading.0.push(scene.clone().untyped());
     }
 }
 
@@ -219,9 +227,7 @@ fn check_assets_ready(
     loading: Res<AssetsLoading>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
-    use bevy::asset::LoadState;
-
-    if server.get_group_load_state(loading.0.iter().map(|a| a.id())) == LoadState::Loaded {
+    if loading.0.iter().all(|a| server.is_loaded_with_dependencies(a.id())) {
         next_state.set(AppState::InGame);
     }
 }
@@ -292,13 +298,13 @@ fn load_level(
 
     let lane_models = LaneModels {
         basic_floor: nodes
-            .get(&asset_server.load("models/lane.gltf#Node0"))
+            .get(asset_server.load("models/lane.gltf#Node0"))
             .unwrap(),
         hole_floor: nodes
-            .get(&asset_server.load("models/lane.gltf#Node2"))
+            .get(asset_server.load("models/lane.gltf#Node2"))
             .unwrap(),
         wall: nodes
-            .get(&asset_server.load("models/lane.gltf#Node1"))
+            .get(asset_server.load("models/lane.gltf#Node1"))
             .unwrap(),
     };
 
@@ -415,7 +421,7 @@ fn customize_scene_materials(
         // Iterate over all entities in scene (once it's loaded)
         let mut handles = handles.iter_many_mut(scene_manager.iter_instance_entities(**instance));
         while let Some((_, mut material_handle)) = handles.fetch_next() {
-            let Some(material) = pbr_materials.get(&material_handle) else {
+            let Some(material) = pbr_materials.get(&*material_handle) else {
                 continue;
             };
             let mut new_material = material.clone();
@@ -512,8 +518,8 @@ fn stop_ball_from_spinning_forever(
 ) {
     for (mut f, vel, mass) in q_ball.iter_mut() {
         if vel.linvel.length() < 0.05 {
-            f.impulse -= vel.linvel * mass.0.mass * 0.9;
-            f.torque_impulse = -vel.angvel * mass.0.principal_inertia * 0.9;
+            f.impulse -= vel.linvel * mass.mass * 0.9;
+            f.torque_impulse = -vel.angvel * mass.principal_inertia * 0.9;
         }
     }
 }
@@ -597,16 +603,17 @@ fn camera_input(
     time: Res<Time>,
 ) {
     for mut controller in query.iter_mut() {
-        for wheel in mouse_wheel.iter() {
+        for wheel in mouse_wheel.read() {
             controller.zoom += wheel.y * 0.001;
         }
         if buttons.pressed(MouseButton::Left) {
-            for mouse in mouse_motion.iter() {
+            for mouse in mouse_motion.read() {
                 let delta = mouse.delta * time.delta_seconds() * 0.3;
                 controller.rotation *= Quat::from_euler(EulerRot::XYZ, -delta.y, -delta.x, 0.0);
             }
         }
     }
+    mouse_motion.clear();
 }
 
 fn move_camera_to_ball(
@@ -708,13 +715,13 @@ fn keyboard_input(
                 let transform = Transform::from_rotation(rot);
                 let dir = transform * Vec3::X;
 
-                let power_multiplier = 1.0 * ball_mass.0.mass;
+                let power_multiplier = 1.0 * ball_mass.mass;
                 let shot = dir * shoot.power * power_multiplier;
                 ball_impulse.impulse.x += shot.x;
                 ball_impulse.impulse.y += shot.y;
                 ball_impulse.impulse.z += shot.z;
 
-                let torqe_magnitude = 1.0 * ball_mass.0.mass;
+                let torqe_magnitude = 1.0 * ball_mass.mass;
                 let torque_amount = match shoot.spin {
                     Some(BallSpin::Left) => -torqe_magnitude,
                     Some(BallSpin::Right) => torqe_magnitude,
@@ -731,7 +738,7 @@ fn keyboard_input(
                     ..ShootSettings::default()
                 };
             } else if ball_velocity.linvel.y.abs() <= 0.05 {
-                ball_impulse.impulse.y += 7.0 * ball_mass.0.mass;
+                ball_impulse.impulse.y += 7.0 * ball_mass.mass;
             }
         }
     }
