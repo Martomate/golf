@@ -497,6 +497,7 @@ fn spawn_ball(
                 angular_damping: 0.9,
             },
             Ccd::enabled(),
+            ContactSkin(rr * 0.1),
         ))
         .insert(Velocity {
             linvel: Vec3::new(0.0, 0.0, 0.0),

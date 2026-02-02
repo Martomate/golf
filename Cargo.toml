@@ -15,7 +15,7 @@ opt-level = 3
 
 [dependencies]
 bevy = "0.13"
-bevy_rapier3d = { version = "0.25.0", features = ["debug-render-3d"] }
+bevy_rapier3d = { version = "0.26.0", features = ["debug-render-3d"] }
 rand = "0.8.5"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
