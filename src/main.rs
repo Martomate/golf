@@ -43,7 +43,7 @@ fn main() {
         ..default()
     }))
     .add_plugins(RapierPhysicsPlugin::<NoUserData>::default())
-    .add_state::<AppState>()
+    .init_state::<AppState>()
     .insert_resource(ClearColor(BACKGROUND_COLOR))
     .insert_resource(AmbientLight {
         color: Color::WHITE,
@@ -252,7 +252,7 @@ fn setup_graphics(mut commands: Commands) {
     commands.spawn(DirectionalLightBundle {
         directional_light: DirectionalLight {
             shadows_enabled: true,
-            illuminance: 20000.0,
+            illuminance: 10000.0,
             ..default()
         },
         transform: Transform::from_xyz(0.0, 1.5, -1.0)
@@ -394,7 +394,7 @@ fn spawn_balls(
     commands.spawn((
         ShootPowerIndicator,
         PbrBundle {
-            mesh: meshes.add(shape::Cube::new(1.0).into()),
+            mesh: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
             transform: Transform::from_xyz(0.0, 0.0, 0.0)
                 .with_rotation(Quat::from_euler(EulerRot::XYZ, 0.0, 0.0, 0.0))
                 .with_scale(Vec3::new(0.0, 0.0, 0.0)),
@@ -598,7 +598,7 @@ struct CameraController {
 fn camera_input(
     mut mouse_motion: EventReader<MouseMotion>,
     mut mouse_wheel: EventReader<MouseWheel>,
-    buttons: Res<Input<MouseButton>>,
+    buttons: Res<ButtonInput<MouseButton>>,
     mut query: Query<&mut CameraController>,
     time: Res<Time>,
 ) {
@@ -637,7 +637,7 @@ fn move_camera_to_ball(
 }
 
 fn keyboard_input(
-    keys: Res<Input<KeyCode>>,
+    keys: Res<ButtonInput<KeyCode>>,
     mut q_ball: Query<(
         &mut ExternalImpulse,
         &ReadMassProperties,
@@ -648,7 +648,7 @@ fn keyboard_input(
     )>,
     mut game_state: ResMut<GameState>,
 ) {
-    if keys.just_pressed(KeyCode::C) || keys.just_pressed(KeyCode::N) {
+    if keys.just_pressed(KeyCode::KeyC) || keys.just_pressed(KeyCode::KeyN) {
         game_state.current_player = (game_state.current_player + 1) % game_state.num_players;
     }
 
@@ -668,26 +668,26 @@ fn keyboard_input(
             let power_speed = 0.1;
             let angle_speed = 0.5 / 180.0 * PI;
 
-            if keys.pressed(KeyCode::W) {
+            if keys.pressed(KeyCode::KeyW) {
                 shoot.power += power_speed;
             }
-            if keys.pressed(KeyCode::S) {
+            if keys.pressed(KeyCode::KeyS) {
                 shoot.power -= power_speed;
             }
-            if keys.pressed(KeyCode::A) {
+            if keys.pressed(KeyCode::KeyA) {
                 shoot.angle += angle_speed;
             }
-            if keys.pressed(KeyCode::D) {
+            if keys.pressed(KeyCode::KeyD) {
                 shoot.angle -= angle_speed;
             }
-            if keys.just_pressed(KeyCode::Q) {
+            if keys.just_pressed(KeyCode::KeyQ) {
                 if let Some(BallSpin::Left) = shoot.spin {
                     shoot.spin = None;
                 } else {
                     shoot.spin = Some(BallSpin::Left);
                 }
             }
-            if keys.just_pressed(KeyCode::E) {
+            if keys.just_pressed(KeyCode::KeyE) {
                 if let Some(BallSpin::Right) = shoot.spin {
                     shoot.spin = None;
                 } else {
