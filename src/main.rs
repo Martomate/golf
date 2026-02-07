@@ -227,7 +227,11 @@ fn check_assets_ready(
     loading: Res<AssetsLoading>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
-    if loading.0.iter().all(|a| server.is_loaded_with_dependencies(a.id())) {
+    if loading
+        .0
+        .iter()
+        .all(|a| server.is_loaded_with_dependencies(a.id()))
+    {
         next_state.set(AppState::InGame);
     }
 }
@@ -622,18 +626,17 @@ fn move_camera_to_ball(
     q_ball: Query<(&Transform, &Ball)>,
     game_state: Res<GameState>,
 ) {
-    if let Ok((controller, mut transform)) = query.get_single_mut() {
-        if let Some((ball_transform, _)) = q_ball
+    if let Ok((controller, mut transform)) = query.get_single_mut()
+        && let Some((ball_transform, _)) = q_ball
             .iter()
             .find(|(_, ball)| ball.player_id == game_state.current_player)
-        {
-            let ball_pos = ball_transform.translation;
-            let mut look = controller.rotation * Vec3::Z;
-            look.y = 0.3;
-            look = look.normalize();
-            transform.translation = ball_pos + look * (-controller.zoom).exp();
-            transform.look_at(ball_pos, Vec3::Y);
-        }
+    {
+        let ball_pos = ball_transform.translation;
+        let mut look = controller.rotation * Vec3::Z;
+        look.y = 0.3;
+        look = look.normalize();
+        transform.translation = ball_pos + look * (-controller.zoom).exp();
+        transform.look_at(ball_pos, Vec3::Y);
     }
 }
 
