@@ -16,7 +16,7 @@ mod collision;
 // These constants are defined in `Transform` units.
 // Using the default 2D camera they correspond 1:1 with screen pixels.
 
-const BACKGROUND_COLOR: Color = Color::rgb(0.5, 0.8, 1.0);
+const BACKGROUND_COLOR: Color = Color::srgb(0.5, 0.8, 1.0);
 
 const NUM_PLAYERS: u32 = 4;
 
@@ -298,13 +298,13 @@ fn load_level(
 
     let lane_models = LaneModels {
         basic_floor: nodes
-            .get(asset_server.load("models/lane.gltf#Node0"))
+            .get(asset_server.load("models/lane.gltf#Node0").id())
             .unwrap(),
         hole_floor: nodes
-            .get(asset_server.load("models/lane.gltf#Node2"))
+            .get(asset_server.load("models/lane.gltf#Node2").id())
             .unwrap(),
         wall: nodes
-            .get(asset_server.load("models/lane.gltf#Node1"))
+            .get(asset_server.load("models/lane.gltf#Node1").id())
             .unwrap(),
     };
 
@@ -399,7 +399,7 @@ fn spawn_balls(
                 .with_rotation(Quat::from_euler(EulerRot::XYZ, 0.0, 0.0, 0.0))
                 .with_scale(Vec3::new(0.0, 0.0, 0.0)),
             material: materials.add(StandardMaterial {
-                base_color: Color::CYAN,
+                base_color: Color::Srgba(bevy::color::palettes::basic::AQUA),
                 ..Default::default()
             }),
             ..Default::default()
