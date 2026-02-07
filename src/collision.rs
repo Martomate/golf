@@ -19,7 +19,7 @@ pub fn create_collider_from_gltf_node(
     let lane_mesh = meshes.get(handle).unwrap();
 
     let lane_collider =
-        Collider::from_bevy_mesh(lane_mesh, &ComputedColliderShape::TriMesh).unwrap();
+        Collider::from_bevy_mesh(lane_mesh, &ComputedColliderShape::TriMesh(TriMeshFlags::default())).unwrap();
 
     let mut tr = if ignore_transform { Transform::IDENTITY } else { node.transform };
     tr.translation /= tr.scale;

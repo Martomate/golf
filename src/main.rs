@@ -242,27 +242,22 @@ fn setup_graphics(mut commands: Commands) {
             rotation: Quat::from_rotation_y(PI),
             zoom: 0.0,
         },
-        Camera3dBundle {
-            camera: Camera {
-                hdr: true,
-                ..default()
-            },
-            transform: Transform::from_xyz(0.0, 1.5, 1.0)
-                .looking_at(Vec3::new(0.0, 0.0, 0.0), Vec3::Y),
+        Camera3d::default(),
+        Camera {
+            hdr: true,
             ..default()
         },
+        Transform::from_xyz(0.0, 1.5, 1.0).looking_at(Vec3::new(0.0, 0.0, 0.0), Vec3::Y),
     ));
 
-    commands.spawn(DirectionalLightBundle {
-        directional_light: DirectionalLight {
+    commands.spawn((
+        DirectionalLight {
             shadows_enabled: true,
             illuminance: 10000.0,
             ..default()
         },
-        transform: Transform::from_xyz(0.0, 1.5, -1.0)
-            .looking_at(Vec3::new(0.0, 0.0, 0.0), Vec3::Y),
-        ..default()
-    });
+        Transform::from_xyz(0.0, 1.5, -1.0).looking_at(Vec3::new(0.0, 0.0, 0.0), Vec3::Y),
+    ));
 }
 
 struct LaneModels<'a> {
@@ -297,7 +292,7 @@ fn load_level(
     commands.spawn((
         Collider::cuboid(100.0, 0.1, 100.0),
         Friction::new(1.0),
-        TransformBundle::from(Transform::from_xyz(0.0, 0.0, 0.0)),
+        Transform::from_xyz(0.0, 0.0, 0.0),
     ));
 
     let lane_models = LaneModels {
@@ -339,29 +334,22 @@ fn load_level(
         commands
             .spawn((
                 RigidBody::Fixed,
-                MaterialMeshBundle {
-                    mesh: gltf_mesh.primitives[0].mesh.clone(),
-                    material: gltf_mesh.primitives[0].material.as_ref().unwrap().clone(),
-                    transform: Transform::from_xyz(sx as f32 * 0.4, 0.3, sz as f32 * 0.4)
-                        .with_rotation(Quat::from_rotation_y(-PI / 2.0))
-                        * extra_transform
-                        * node.transform.with_translation(Vec3::ZERO),
-                    ..default()
-                },
+                Mesh3d(gltf_mesh.primitives[0].mesh.clone()),
+                MeshMaterial3d(gltf_mesh.primitives[0].material.as_ref().unwrap().clone()),
+                Transform::from_xyz(sx as f32 * 0.4, 0.3, sz as f32 * 0.4)
+                    .with_rotation(Quat::from_rotation_y(-PI / 2.0))
+                    * extra_transform
+                    * node.transform.with_translation(Vec3::ZERO),
                 Friction::new(1.0),
             ))
             .with_children(|parent| {
-                parent.spawn((collider, TransformBundle::IDENTITY));
+                parent.spawn((collider, Transform::IDENTITY));
             });
 
         if part == LanePart::HoleFloor {
             commands.spawn((
                 Collider::cylinder(0.02, 0.05),
-                TransformBundle::from_transform(Transform::from_xyz(
-                    sx as f32 * 0.4,
-                    0.3 - 0.025 + 0.03,
-                    sz as f32 * 0.4,
-                )),
+                Transform::from_xyz(sx as f32 * 0.4, 0.3 - 0.025 + 0.03, sz as f32 * 0.4),
                 Sensor,
                 Hole,
             ));
@@ -397,24 +385,21 @@ fn spawn_balls(
 
     commands.spawn((
         ShootPowerIndicator,
-        PbrBundle {
-            mesh: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
-            transform: Transform::from_xyz(0.0, 0.0, 0.0)
-                .with_rotation(Quat::from_euler(EulerRot::XYZ, 0.0, 0.0, 0.0))
-                .with_scale(Vec3::new(0.0, 0.0, 0.0)),
-            material: materials.add(StandardMaterial {
-                base_color: Color::Srgba(bevy::color::palettes::basic::AQUA),
-                ..Default::default()
-            }),
+        Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
+        Transform::from_xyz(0.0, 0.0, 0.0)
+            .with_rotation(Quat::from_euler(EulerRot::XYZ, 0.0, 0.0, 0.0))
+            .with_scale(Vec3::new(0.0, 0.0, 0.0)),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::Srgba(bevy::color::palettes::basic::AQUA),
             ..Default::default()
-        },
+        })),
     ));
 }
 
 fn customize_scene_materials(
     mut commands: Commands,
     unloaded_instances: Query<(Entity, &SceneInstance, &NeedsColorChange)>,
-    mut handles: Query<(Entity, &mut Handle<StandardMaterial>)>,
+    mut handles: Query<(Entity, &mut MeshMaterial3d<StandardMaterial>)>,
     mut pbr_materials: ResMut<Assets<StandardMaterial>>,
     scene_manager: Res<SceneSpawner>,
 ) {
@@ -431,7 +416,7 @@ fn customize_scene_materials(
             let mut new_material = material.clone();
             new_material.base_color = requesed_change.0;
 
-            *material_handle = pbr_materials.add(new_material);
+            material_handle.0 = pbr_materials.add(new_material);
         }
     }
 }
@@ -457,7 +442,7 @@ fn spawn_ball(
         BallShape::Cube => "cube",
         BallShape::Cone => "cone",
     };
-    let scene_handle = asset_server.load(format!("models/{}.gltf#Scene0", model_file));
+    let scene_handle = asset_server.load::<Scene>(format!("models/{}.gltf#Scene0", model_file));
 
     let rr = 0.01; // rounding radius
 
@@ -507,12 +492,11 @@ fn spawn_ball(
             linvel: Vec3::new(0.0, 0.0, 0.0),
             angvel: Vec3::new(0.0, 0.0, 0.0),
         })
-        .insert(SceneBundle {
-            scene: scene_handle,
-            transform: Transform::from_xyz(offset_along, 1.0, offset_sideways)
+        .insert((
+            SceneRoot(scene_handle),
+            Transform::from_xyz(offset_along, 1.0, offset_sideways)
                 .with_scale(Vec3::ONE / model_oversize),
-            ..default()
-        })
+        ))
         .insert(NeedsColorChange(color))
         .insert(Ball { player_id, hits: 0 })
         .insert(ShootSettings::default());
@@ -531,7 +515,7 @@ fn stop_ball_from_spinning_forever(
 
 fn check_ball_in_hole(
     mut commands: Commands,
-    rapier_context: Res<RapierContext>,
+    rapier_context: ReadRapierContext,
     q_hole: Query<Entity, With<Hole>>,
     q_ball: Query<(Entity, &Velocity, &Ball), Without<Hole>>,
     mut game_state: ResMut<GameState>,
@@ -539,7 +523,7 @@ fn check_ball_in_hole(
     for hole_entity in q_hole.iter() {
         for (ball_entity, ball_velocity, ball) in q_ball.iter() {
             if ball_velocity.linvel.length() < 0.01
-                && rapier_context.intersection_pair(hole_entity, ball_entity) == Some(true)
+                && rapier_context.single().intersection_pair(hole_entity, ball_entity) == Some(true)
             {
                 game_state.players[ball.player_id as usize]
                     .scores
@@ -613,7 +597,7 @@ fn camera_input(
         }
         if buttons.pressed(MouseButton::Left) {
             for mouse in mouse_motion.read() {
-                let delta = mouse.delta * time.delta_seconds() * 0.3;
+                let delta = mouse.delta * time.delta_secs() * 0.3;
                 controller.rotation *= Quat::from_euler(EulerRot::XYZ, -delta.y, -delta.x, 0.0);
             }
         }
